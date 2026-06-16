@@ -346,15 +346,17 @@ class DiktorApp:
         def do():
             from deep_translator import GoogleTranslator
             return GoogleTranslator(source="ru", target=target).translate(text)
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                return ex.submit(do).result(timeout=10)
+            return ex.submit(do).result(timeout=10)
         except concurrent.futures.TimeoutError:
             self._log("Перевод: нет ответа от сервера (таймаут 10 с)")
             return None
         except Exception as e:
             self._log(f"Перевод недоступен: {e}")
             return None
+        finally:
+            ex.shutdown(wait=False)
 
     def _synth(self, text, voice, rate):
         async def go():
