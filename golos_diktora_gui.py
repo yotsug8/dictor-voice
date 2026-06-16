@@ -23,6 +23,7 @@ VOICES = {
     "Светлана (женский)": "ru-RU-SvetlanaNeural",
 }
 MODELS = ["tiny", "base", "small", "medium"]
+MODEL_BEAM = {"tiny": 1, "base": 1, "small": 3, "medium": 5}
 SPEEDS = {"Медленно": "-25%", "Обычная": "+0%", "Быстро": "+25%"}
 # display -> (код перевода, голос для озвучки перевода)
 LANGUAGES = {
@@ -31,7 +32,13 @@ LANGUAGES = {
     "Немецкий": ("de", "de-DE-KillianNeural"),
     "Французский": ("fr", "fr-FR-HenriNeural"),
     "Испанский": ("es", "es-ES-AlvaroNeural"),
+    "Итальянский": ("it", "it-IT-DiegoNeural"),
+    "Португальский": ("pt", "pt-BR-AntonioNeural"),
+    "Польский": ("pl", "pl-PL-MarekNeural"),
+    "Японский": ("ja", "ja-JP-KeitaNeural"),
+    "Корейский": ("ko", "ko-KR-InJoonNeural"),
     "Китайский": ("zh-CN", "zh-CN-YunxiNeural"),
+    "Турецкий": ("tr", "tr-TR-AhmetNeural"),
 }
 TEST_PHRASE = "Проверка связи. Это голос диктора."
 FONT = "Segoe UI"
@@ -54,8 +61,8 @@ class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("560x830")
-        self.root.minsize(520, 780)
+        self.root.geometry("560x875")
+        self.root.minsize(520, 825)
         self.root.configure(fg_color=BG)
 
         self.running = False
@@ -94,6 +101,7 @@ class DiktorApp:
                     "speed": self.speed_var.get(),
                     "lang": self.lang_var.get(),
                     "volume": int(self.vol_var.get()),
+                    "silence": round(float(self.sil_var.get()), 1),
                     "topmost": bool(self.topmost_var.get()),
                 }, f, ensure_ascii=False)
         except Exception:
@@ -137,6 +145,7 @@ class DiktorApp:
         self.speed_var = ctk.StringVar(value=g("speed", "Обычная", SPEEDS))
         self.lang_var = ctk.StringVar(value=g("lang", list(LANGUAGES)[0], LANGUAGES))
         self.vol_var = ctk.IntVar(value=int(self.cfg.get("volume", 100)))
+        self.sil_var = ctk.DoubleVar(value=float(self.cfg.get("silence", 0.3)))
 
         devices = self._devices()
         dev0 = self.cfg.get("device") if self.cfg.get("device") in devices else self._default_device(devices)
@@ -161,9 +170,18 @@ class DiktorApp:
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
                       fg_color=FIELD, command=self._on_vol).grid(row=5, column=0, columnspan=2, sticky="ew", padx=18)
 
-        self._cap(card, "Куда выводить звук").grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        silcap = ctk.CTkFrame(card, fg_color="transparent")
+        silcap.grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        ctk.CTkLabel(silcap, text="Задержка перед озвучкой", text_color=SUB, font=(FONT, 12)).pack(side="left")
+        self.sil_lbl = ctk.CTkLabel(silcap, text=f"{self.sil_var.get():.1f} с", text_color=ACCENT, font=(FONT, 12))
+        self.sil_lbl.pack(side="right")
+        ctk.CTkSlider(card, from_=0.2, to=1.5, variable=self.sil_var, number_of_steps=13,
+                      progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
+                      fg_color=FIELD, command=self._on_sil).grid(row=7, column=0, columnspan=2, sticky="ew", padx=18)
+
+        self._cap(card, "Куда выводить звук").grid(row=8, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
         devrow = ctk.CTkFrame(card, fg_color="transparent")
-        devrow.grid(row=7, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 18))
+        devrow.grid(row=9, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 18))
         devrow.columnconfigure(0, weight=1)
         self.device_menu = self._menu(devrow, self.device_var, devices)
         self.device_menu.grid(row=0, column=0, sticky="ew")
@@ -185,7 +203,7 @@ class DiktorApp:
                                       fg_color=FIELD, hover_color="#34344a", text_color=TEXT,
                                       corner_radius=14, font=(FONT, 13, "bold"))
         self.test_btn.pack(side="left", padx=5)
-        ctk.CTkLabel(self.root, text="F8 — пауза звука   •   крестик сворачивает в трей",
+        ctk.CTkLabel(self.root, text="F8 — пауза звука   •   F9 — старт/стоп   •   крестик сворачивает в трей",
                      text_color=GREY, font=(FONT, 10)).pack(pady=(2, 2))
 
         self.topmost_var = ctk.BooleanVar(value=bool(self.cfg.get("topmost", False)))
@@ -259,6 +277,9 @@ class DiktorApp:
     def _on_vol(self, val):
         self.vol_lbl.configure(text=f"{int(float(val))}%")
 
+    def _on_sil(self, val):
+        self.sil_lbl.configure(text=f"{float(val):.1f} с")
+
     def _apply_topmost(self):
         try:
             self.root.attributes("-topmost", bool(self.topmost_var.get()))
@@ -319,6 +340,7 @@ class DiktorApp:
         try:
             import keyboard
             keyboard.add_hotkey("f8", lambda: self.root.after(0, self.toggle_mute))
+            keyboard.add_hotkey("f9", lambda: self.root.after(0, self.toggle))
         except Exception:
             pass
 
@@ -429,7 +451,8 @@ class DiktorApp:
         self._save_settings()
         idx = self._device_idx()
         model = self.model_var.get()
-        threading.Thread(target=self._run, args=(idx, model), daemon=True).start()
+        silence = round(float(self.sil_var.get()), 1)
+        threading.Thread(target=self._run, args=(idx, model, silence), daemon=True).start()
 
     def stop(self):
         self.running = False
@@ -444,7 +467,7 @@ class DiktorApp:
             self.recorder = None
 
     # ---------- worker ----------
-    def _run(self, device_idx, model):
+    def _run(self, device_idx, model, silence):
         try:
             import torch
             from RealtimeSTT import AudioToTextRecorder
@@ -455,14 +478,16 @@ class DiktorApp:
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         compute = "float16" if device == "cuda" else "int8"
-        self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}")
+        beam = MODEL_BEAM.get(model, 5)
+        self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}  |  задержка: {silence} с  |  beam: {beam}")
         self._log("Загрузка модели (при первом запуске — загрузка из интернета)...")
 
         try:
             self.recorder = AudioToTextRecorder(
                 model=model, language="ru", spinner=False,
                 device=device, compute_type=compute,
-                post_speech_silence_duration=0.4,
+                post_speech_silence_duration=silence,
+                beam_size=beam,
             )
         except Exception as e:
             self._log(f"Ошибка запуска: {e}")
