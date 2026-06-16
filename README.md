@@ -1,3 +1,4 @@
+<img width="555" height="645" alt="preview" src="https://github.com/user-attachments/assets/af9af1a8-73f5-4ccc-9c25-7a85d8bbfb0f" />
 # Голос Диктора
 
 Замена голоса на синтезированный голос диктора в реальном времени (русский).
