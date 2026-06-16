@@ -1,0 +1,13 @@
+Это приложение использует сторонние открытые компоненты. Спасибо их авторам.
+
+- RealtimeSTT — MIT License
+- faster-whisper — MIT License
+- edge-tts — GPL-3.0 License
+- silero-vad — MIT License
+- PyTorch (torch, torchaudio) — BSD-style License
+- sounddevice — MIT License
+- soundfile — BSD License
+- модель Whisper (OpenAI) — MIT License
+
+Виртуальный микрофон VB-Cable (VB-Audio) в сборку не входит и
+устанавливается пользователем отдельно: https://vb-audio.com/Cable/
