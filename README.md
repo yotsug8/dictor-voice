@@ -6,10 +6,10 @@
 
 ## Скачать
 
-Готовые сборки — в разделе [Releases](../../releases).
+- **Видеокарта NVIDIA** → [Diktor-NVIDIA.zip](https://drive.google.com/file/d/1nHYnuySDV8YYJy3kariF1gVtuOEsCCQm/view?usp=sharing) (быстрее, скачивается с Google Drive)
+- **Без видеокарты NVIDIA** → `Diktor-CPU.zip` в разделе [Releases](../../releases) (работает у всех, медленнее)
 
-- **Видеокарта NVIDIA** → `Diktor-NVIDIA.zip` (быстрее)
-- **Без видеокарты NVIDIA** → `Diktor-CPU.zip` (работает у всех, медленнее)
+> При скачивании NVIDIA-версии Google Drive может предупредить «не удалось проверить на вирусы» (из-за размера файла) — это нормально, нажмите «Скачать всё равно».
 
 ## Установка
 
