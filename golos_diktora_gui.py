@@ -41,6 +41,7 @@ LANGUAGES = {
     "Турецкий": ("tr", "tr-TR-AhmetNeural"),
 }
 TEST_PHRASE = "Проверка связи. Это голос диктора."
+WHISPER_PROMPT = "Привет. Да, конечно. Хорошо, понятно. Спасибо. Сегодня хорошая погода."
 FONT = "Segoe UI"
 
 
@@ -332,7 +333,9 @@ class DiktorApp:
 
     # ---------- ui queue ----------
     def _log(self, msg):
-        self.ui_queue.put(("log", msg))
+        import datetime
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        self.ui_queue.put(("log", f"[{ts}] {msg}"))
 
     def _status(self, color, label):
         self.ui_queue.put(("status", (color, label)))
@@ -473,6 +476,7 @@ class DiktorApp:
                 device=device, compute_type=compute,
                 post_speech_silence_duration=0.5,
                 beam_size=beam,
+                initial_prompt=WHISPER_PROMPT,
             )
         except Exception as e:
             self._log(f"Ошибка запуска: {e}")
@@ -481,6 +485,7 @@ class DiktorApp:
 
         self._log("Готово к работе.")
         self._status(ACCENT, "Прослушивание")
+        last_text = ""
         while self.running:
             try:
                 text = self.recorder.text()
@@ -489,6 +494,9 @@ class DiktorApp:
                 text = (text or "").strip()
                 if len(text) < 2:
                     continue
+                if text == last_text:
+                    continue
+                last_text = text
                 self._log(f"› {text}")
                 if self.muted:
                     continue
