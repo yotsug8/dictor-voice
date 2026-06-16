@@ -1,174 +1,240 @@
 import io
+import os
+import sys
+import json
 import asyncio
 import threading
 import queue
 
-import tkinter as tk
-from tkinter import scrolledtext
-
+import numpy as np
 import sounddevice as sd
 import soundfile as sf
 import edge_tts
+import customtkinter as ctk
 
 
-# ---- palette (Catppuccin Mocha) ----
-BG      = "#1e1e2e"
-SURFACE = "#181825"
-CARD    = "#313244"
-HOVER   = "#45475a"
-TEXT    = "#cdd6f4"
-SUBTEXT = "#a6adc8"
-BLUE    = "#89b4fa"
-GREEN   = "#a6e3a1"
-RED     = "#f38ba8"
-YELLOW  = "#f9e2af"
-GREY    = "#585b70"
+# ---- palette ----
+BG="#15151f"; CARD="#1f1f2e"; FIELD="#2a2a3c"; TEXT="#e6e9f0"; SUB="#9aa0b4"
+ACCENT="#7c8cff"; ACC_HOV="#6675f0"; GREEN="#3ecf8e"; GREEN_H="#34b87d"
+RED="#f0617f"; RED_H="#db5071"; YELLOW="#f5c860"; GREY="#5b5f70"
 
 VOICES = {
     "Дмитрий (мужской)": "ru-RU-DmitryNeural",
     "Светлана (женский)": "ru-RU-SvetlanaNeural",
 }
 MODELS = ["tiny", "base", "small", "medium"]
+SPEEDS = {"Медленно": "-25%", "Обычная": "+0%", "Быстро": "+25%"}
+# display -> (код перевода, голос для озвучки перевода)
+LANGUAGES = {
+    "Выкл (русский)": (None, None),
+    "Английский": ("en", "en-US-GuyNeural"),
+    "Немецкий": ("de", "de-DE-KillianNeural"),
+    "Французский": ("fr", "fr-FR-HenriNeural"),
+    "Испанский": ("es", "es-ES-AlvaroNeural"),
+    "Китайский": ("zh-CN", "zh-CN-YunxiNeural"),
+}
+TEST_PHRASE = "Проверка связи. Это голос диктора."
+FONT = "Segoe UI"
 
 
-class RoundButton(tk.Canvas):
-    def __init__(self, parent, text, command, fill, hover, fg="#11111b",
-                 width=240, height=54, radius=16):
-        super().__init__(parent, width=width, height=height, bg=parent["bg"],
-                         highlightthickness=0)
-        self.command = command
-        self.fill, self.hover, self.fg = fill, hover, fg
-        self.w, self.h, self.r = width, height, radius
-        self._text = text
-        self._draw(fill)
-        self.bind("<Enter>", lambda e: self._draw(self.hover))
-        self.bind("<Leave>", lambda e: self._draw(self.fill))
-        self.bind("<Button-1>", lambda e: self.command())
+def _base_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
-    def _round(self, x1, y1, x2, y2, r, **kw):
-        pts = [x1+r, y1, x2-r, y1, x2, y1, x2, y1+r, x2, y2-r, x2, y2,
-               x2-r, y2, x1+r, y2, x1, y2, x1, y2-r, x1, y1+r, x1, y1]
-        return self.create_polygon(pts, smooth=True, **kw)
 
-    def _draw(self, color):
-        self.delete("all")
-        self._round(2, 2, self.w-2, self.h-2, self.r, fill=color)
-        self.create_text(self.w/2, self.h/2, text=self._text,
-                         fill=self.fg, font=("Segoe UI", 13, "bold"))
+def _resource(name):
+    return os.path.join(getattr(sys, "_MEIPASS", _base_dir()), name)
 
-    def set(self, text, fill, hover):
-        self._text, self.fill, self.hover = text, fill, hover
-        self._draw(fill)
+
+SETTINGS_FILE = os.path.join(_base_dir(), "settings.json")
 
 
 class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("600x620")
-        self.root.minsize(560, 580)
-        self.root.configure(bg=BG)
+        self.root.geometry("560x830")
+        self.root.minsize(520, 780)
+        self.root.configure(fg_color=BG)
 
         self.running = False
+        self.muted = False
         self.recorder = None
+        self.device_map = {}
+        self._play_lock = threading.Lock()
+        self._testing = False
+        self.tray = None
         self.ui_queue = queue.Queue()
+        self.cfg = self._load_settings()
 
         self._build()
         self.root.after(80, self._drain)
+        self._setup_hotkey()
+        self._setup_tray()
+        self.root.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
 
-    # ---------- helpers ----------
-    def _dropdown(self, parent, variable, options):
-        om = tk.OptionMenu(parent, variable, *options)
-        om.config(bg=CARD, fg=TEXT, activebackground=HOVER, activeforeground=TEXT,
-                  relief="flat", bd=0, highlightthickness=0, anchor="w",
-                  font=("Segoe UI", 10), cursor="hand2", padx=12, pady=7,
-                  indicatoron=True)
-        om["menu"].config(bg=CARD, fg=TEXT, activebackground=BLUE,
-                          activeforeground="#11111b", relief="flat", bd=0,
-                          font=("Segoe UI", 10), tearoff=0)
-        return om
+    # ---------- settings ----------
+    def _load_settings(self):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
+    def _save_settings(self):
+        try:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump({
+                    "voice": self.voice_var.get(),
+                    "model": self.model_var.get(),
+                    "device": self.device_var.get(),
+                    "speed": self.speed_var.get(),
+                    "lang": self.lang_var.get(),
+                    "volume": int(self.vol_var.get()),
+                    "topmost": bool(self.topmost_var.get()),
+                }, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    # ---------- ui ----------
     def _cap(self, parent, text):
-        return tk.Label(parent, text=text, bg=parent["bg"], fg=SUBTEXT,
-                        font=("Segoe UI", 10))
+        return ctk.CTkLabel(parent, text=text, text_color=SUB, font=(FONT, 12), anchor="w")
+
+    def _menu(self, parent, variable, values, **kw):
+        return ctk.CTkOptionMenu(parent, variable=variable, values=values,
+                                 fg_color=FIELD, button_color=FIELD,
+                                 button_hover_color="#34344a", text_color=TEXT,
+                                 dropdown_fg_color=CARD, dropdown_hover_color=FIELD,
+                                 dropdown_text_color=TEXT, corner_radius=10,
+                                 font=(FONT, 12), dropdown_font=(FONT, 12), **kw)
 
     def _build(self):
-        # header
-        head = tk.Frame(self.root, bg=BG)
-        head.pack(fill="x", padx=28, pady=(22, 6))
-        tk.Label(head, text="Голос Диктора", bg=BG, fg=TEXT,
-                 font=("Segoe UI", 22, "bold")).pack(side="left")
-        st = tk.Frame(head, bg=BG)
-        st.pack(side="right", pady=6)
-        self.dot = tk.Canvas(st, width=14, height=14, bg=BG, highlightthickness=0)
-        self.dot.pack(side="left", padx=(0, 7))
-        self._dot_id = self.dot.create_oval(2, 2, 12, 12, fill=GREY, outline="")
-        self.status_lbl = tk.Label(st, text="Остановлено", bg=BG, fg=SUBTEXT,
-                                   font=("Segoe UI", 10))
-        self.status_lbl.pack(side="left")
+        head = ctk.CTkFrame(self.root, fg_color="transparent")
+        head.pack(fill="x", padx=26, pady=(20, 2))
+        ctk.CTkLabel(head, text="Голос Диктора", text_color=TEXT,
+                     font=(FONT, 24, "bold")).pack(side="left")
+        self.dot = ctk.CTkLabel(head, text="●", text_color=GREY, font=(FONT, 14))
+        self.dot.pack(side="right", padx=(6, 0))
+        self.status_lbl = ctk.CTkLabel(head, text="Остановлено", text_color=SUB, font=(FONT, 12))
+        self.status_lbl.pack(side="right")
 
-        tk.Label(self.root, text="Говори — после паузы диктор повторит твоими словами",
-                 bg=BG, fg=SUBTEXT, font=("Segoe UI", 9)).pack(anchor="w", padx=28)
+        ctk.CTkLabel(self.root, text="После паузы в речи программа озвучит сказанное голосом диктора",
+                     text_color=SUB, font=(FONT, 11), anchor="w").pack(fill="x", padx=28)
 
-        # settings card
-        card = tk.Frame(self.root, bg=CARD)
-        card.pack(fill="x", padx=28, pady=18)
-        inner = tk.Frame(card, bg=CARD)
-        inner.pack(fill="x", padx=18, pady=16)
+        card = ctk.CTkFrame(self.root, fg_color=CARD, corner_radius=16)
+        card.pack(fill="x", padx=26, pady=14)
+        card.columnconfigure(0, weight=1)
+        card.columnconfigure(1, weight=1)
 
-        self.voice_var = tk.StringVar(value=list(VOICES.keys())[0])
-        self.model_var = tk.StringVar(value="small")
+        g = lambda k, d, pool: self.cfg.get(k) if self.cfg.get(k) in pool else d
+        self.voice_var = ctk.StringVar(value=g("voice", list(VOICES)[0], VOICES))
+        self.model_var = ctk.StringVar(value=g("model", "small", MODELS))
+        self.speed_var = ctk.StringVar(value=g("speed", "Обычная", SPEEDS))
+        self.lang_var = ctk.StringVar(value=g("lang", list(LANGUAGES)[0], LANGUAGES))
+        self.vol_var = ctk.IntVar(value=int(self.cfg.get("volume", 100)))
+
         devices = self._devices()
-        self.device_var = tk.StringVar(value=self._default_device(devices))
+        dev0 = self.cfg.get("device") if self.cfg.get("device") in devices else self._default_device(devices)
+        self.device_var = ctk.StringVar(value=dev0)
 
-        self._cap(inner, "Голос диктора").grid(row=0, column=0, sticky="w", pady=(0, 2))
-        self._dropdown(inner, self.voice_var, list(VOICES.keys())).grid(
-            row=1, column=0, sticky="ew", pady=(0, 12), padx=(0, 8))
+        self._cap(card, "Голос диктора").grid(row=0, column=0, sticky="ew", padx=(18, 9), pady=(16, 2))
+        self._menu(card, self.voice_var, list(VOICES)).grid(row=1, column=0, sticky="ew", padx=(18, 9))
+        self._cap(card, "Точность (модель)").grid(row=0, column=1, sticky="ew", padx=(9, 18), pady=(16, 2))
+        self._menu(card, self.model_var, MODELS).grid(row=1, column=1, sticky="ew", padx=(9, 18))
 
-        self._cap(inner, "Точность (модель)").grid(row=0, column=1, sticky="w", pady=(0, 2))
-        self._dropdown(inner, self.model_var, MODELS).grid(
-            row=1, column=1, sticky="ew", pady=(0, 12))
+        self._cap(card, "Скорость речи").grid(row=2, column=0, sticky="ew", padx=(18, 9), pady=(14, 2))
+        self._menu(card, self.speed_var, list(SPEEDS)).grid(row=3, column=0, sticky="ew", padx=(18, 9))
+        self._cap(card, "Перевод (диктор на языке)").grid(row=2, column=1, sticky="ew", padx=(9, 18), pady=(14, 2))
+        self._menu(card, self.lang_var, list(LANGUAGES)).grid(row=3, column=1, sticky="ew", padx=(9, 18))
 
-        self._cap(inner, "Куда выводить звук").grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 2))
-        self._dropdown(inner, self.device_var, devices).grid(
-            row=3, column=0, columnspan=2, sticky="ew")
+        volcap = ctk.CTkFrame(card, fg_color="transparent")
+        volcap.grid(row=4, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        ctk.CTkLabel(volcap, text="Громкость диктора", text_color=SUB, font=(FONT, 12)).pack(side="left")
+        self.vol_lbl = ctk.CTkLabel(volcap, text=f"{self.vol_var.get()}%", text_color=ACCENT, font=(FONT, 12))
+        self.vol_lbl.pack(side="right")
+        ctk.CTkSlider(card, from_=0, to=100, variable=self.vol_var, number_of_steps=100,
+                      progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
+                      fg_color=FIELD, command=self._on_vol).grid(row=5, column=0, columnspan=2, sticky="ew", padx=18)
 
-        inner.columnconfigure(0, weight=1)
-        inner.columnconfigure(1, weight=1)
+        self._cap(card, "Куда выводить звук").grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        devrow = ctk.CTkFrame(card, fg_color="transparent")
+        devrow.grid(row=7, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 18))
+        devrow.columnconfigure(0, weight=1)
+        self.device_menu = self._menu(devrow, self.device_var, devices)
+        self.device_menu.grid(row=0, column=0, sticky="ew")
+        ctk.CTkButton(devrow, text="↻", width=40, command=self.refresh_devices,
+                      fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
+                      corner_radius=10, font=(FONT, 15, "bold")).grid(row=0, column=1, padx=(8, 0))
 
-        # button
-        self.btn = RoundButton(self.root, "▶   Старт", self.toggle, GREEN, "#b9f0b4")
-        self.btn.pack(pady=8)
+        btns = ctk.CTkFrame(self.root, fg_color="transparent")
+        btns.pack(pady=6)
+        self.btn = ctk.CTkButton(btns, text="▶  Старт", command=self.toggle, width=200, height=46,
+                                 fg_color=GREEN, hover_color=GREEN_H, text_color="#0c1410",
+                                 corner_radius=14, font=(FONT, 15, "bold"))
+        self.btn.pack(side="left", padx=5)
+        self.mute_btn = ctk.CTkButton(btns, text="🔊", command=self.toggle_mute, width=58, height=46,
+                                      fg_color=FIELD, hover_color="#34344a", text_color=TEXT,
+                                      corner_radius=14, font=(FONT, 16))
+        self.mute_btn.pack(side="left", padx=5)
+        self.test_btn = ctk.CTkButton(btns, text="Тест", command=self.test, width=80, height=46,
+                                      fg_color=FIELD, hover_color="#34344a", text_color=TEXT,
+                                      corner_radius=14, font=(FONT, 13, "bold"))
+        self.test_btn.pack(side="left", padx=5)
+        ctk.CTkLabel(self.root, text="F8 — пауза звука   •   крестик сворачивает в трей",
+                     text_color=GREY, font=(FONT, 10)).pack(pady=(2, 2))
 
-        # transcript
-        tk.Label(self.root, text="РАСПОЗНАННАЯ РЕЧЬ", bg=BG, fg=GREY,
-                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=30, pady=(8, 4))
-        wrap = tk.Frame(self.root, bg=SURFACE)
-        wrap.pack(fill="both", expand=True, padx=28, pady=(0, 22))
-        self.log = scrolledtext.ScrolledText(wrap, bg=SURFACE, fg=TEXT,
-                                             font=("Consolas", 10), relief="flat",
-                                             wrap="word", borderwidth=0,
-                                             insertbackground=TEXT)
-        self.log.pack(fill="both", expand=True, padx=14, pady=12)
-        self.log.tag_config("you", foreground=BLUE)
-        self.log.tag_config("sys", foreground=SUBTEXT)
-        self.log.tag_config("err", foreground=RED)
+        self.topmost_var = ctk.BooleanVar(value=bool(self.cfg.get("topmost", False)))
+        ctk.CTkSwitch(self.root, text="Поверх всех окон", variable=self.topmost_var,
+                      command=self._apply_topmost, progress_color=ACCENT,
+                      text_color=SUB, font=(FONT, 11)).pack(pady=(0, 2))
+        self._apply_topmost()
+
+        labrow = ctk.CTkFrame(self.root, fg_color="transparent")
+        labrow.pack(fill="x", padx=30, pady=(8, 4))
+        ctk.CTkLabel(labrow, text="РАСПОЗНАННАЯ РЕЧЬ", text_color=GREY,
+                     font=(FONT, 10, "bold")).pack(side="left")
+        ctk.CTkButton(labrow, text="Очистить", width=72, height=24, command=self._clear_log,
+                      fg_color=FIELD, hover_color="#34344a", text_color=SUB,
+                      corner_radius=8, font=(FONT, 10)).pack(side="right")
+        self.log = ctk.CTkTextbox(self.root, fg_color=CARD, text_color=TEXT,
+                                  font=("Consolas", 12), corner_radius=12, wrap="word")
+        self.log.pack(fill="both", expand=True, padx=26, pady=(0, 22))
+
+    # ---------- devices ----------
+    def _friendly(self, name):
+        if "cable input" in name.lower():
+            return "Виртуальный микрофон (CABLE Input)"
+        if "(" in name and ")" not in name:
+            name = name.split("(")[0].strip()
+        return name
 
     def _devices(self):
-        # only MME host API to avoid the same device repeating across host APIs
-        mme = None
         try:
-            for i, ha in enumerate(sd.query_hostapis()):
-                if ha["name"] == "MME":
-                    mme = i
-                    break
+            apis = [ha["name"] for ha in sd.query_hostapis()]
         except Exception:
-            mme = None
-        out = []
+            apis = []
+        target = None
+        for pref in ("Windows DirectSound", "Windows WASAPI", "MME"):
+            if pref in apis:
+                target = apis.index(pref); break
+        self.device_map = {}
+        labels = []
         for idx, dev in enumerate(sd.query_devices()):
-            if dev["max_output_channels"] > 0 and (mme is None or dev["hostapi"] == mme):
-                out.append(f"[{idx}] {dev['name']}")
-        return out or ["[0] (нет устройств)"]
+            if dev["max_output_channels"] <= 0:
+                continue
+            if target is not None and dev["hostapi"] != target:
+                continue
+            low = dev["name"].lower()
+            if "sound mapper" in low or "primary sound" in low or "первичный" in low:
+                continue
+            label = self._friendly(dev["name"])
+            base, n = label, 2
+            while label in self.device_map:
+                label = f"{base} ({n})"; n += 1
+            self.device_map[label] = idx
+            labels.append(label)
+        return labels or ["(нет устройств)"]
 
     def _default_device(self, devices):
         for d in devices:
@@ -176,9 +242,84 @@ class DiktorApp:
                 return d
         return devices[0]
 
+    def _device_idx(self):
+        return self.device_map.get(self.device_var.get(), 0)
+
+    def refresh_devices(self):
+        devices = self._devices()
+        self.device_menu.configure(values=devices)
+        if self.device_var.get() not in devices:
+            self.device_var.set(self._default_device(devices))
+        self._log("Список устройств обновлён.")
+
+    def _on_vol(self, val):
+        self.vol_lbl.configure(text=f"{int(float(val))}%")
+
+    def _apply_topmost(self):
+        try:
+            self.root.attributes("-topmost", bool(self.topmost_var.get()))
+        except Exception:
+            pass
+
+    def _clear_log(self):
+        try:
+            self.log.delete("1.0", "end")
+        except Exception:
+            pass
+
+    # ---------- tray ----------
+    def _setup_tray(self):
+        try:
+            import pystray
+            from PIL import Image
+            img = Image.open(_resource("icon.ico"))
+            menu = pystray.Menu(
+                pystray.MenuItem("Показать", lambda i, it: self.root.after(0, self._show)),
+                pystray.MenuItem("Выход", lambda i, it: self.root.after(0, self._quit)),
+            )
+            self.tray = pystray.Icon("diktor", img, "Голос Диктора", menu)
+            threading.Thread(target=self.tray.run, daemon=True).start()
+        except Exception:
+            self.tray = None
+
+    def _show(self):
+        self.root.deiconify(); self.root.lift()
+
+    def _hide_to_tray(self):
+        if self.tray is not None:
+            self.root.withdraw()
+        else:
+            self._quit()
+
+    def _quit(self):
+        try:
+            self._save_settings()
+        except Exception:
+            pass
+        self.running = False
+        if self.recorder is not None:
+            try:
+                self.recorder.shutdown()
+            except Exception:
+                pass
+        if self.tray is not None:
+            try:
+                self.tray.stop()
+            except Exception:
+                pass
+        self.root.destroy()
+
+    # ---------- hotkey ----------
+    def _setup_hotkey(self):
+        try:
+            import keyboard
+            keyboard.add_hotkey("f8", lambda: self.root.after(0, self.toggle_mute))
+        except Exception:
+            pass
+
     # ---------- ui queue ----------
-    def _log(self, msg, tag="sys"):
-        self.ui_queue.put(("log", (msg, tag)))
+    def _log(self, msg):
+        self.ui_queue.put(("log", msg))
 
     def _status(self, color, label):
         self.ui_queue.put(("status", (color, label)))
@@ -187,44 +328,25 @@ class DiktorApp:
         while not self.ui_queue.empty():
             kind, payload = self.ui_queue.get()
             if kind == "log":
-                msg, tag = payload
-                self.log.insert("end", msg + "\n", tag)
-                self.log.see("end")
+                self.log.insert("end", payload + "\n"); self.log.see("end")
             else:
                 color, label = payload
-                self.dot.itemconfig(self._dot_id, fill=color)
-                self.status_lbl.config(text=label, fg=color)
+                self.dot.configure(text_color=color)
+                self.status_lbl.configure(text=label, text_color=color)
         self.root.after(80, self._drain)
 
-    # ---------- control ----------
-    def toggle(self):
-        self.stop() if self.running else self.start()
+    # ---------- audio / translate ----------
+    def _translate(self, text, target):
+        try:
+            from deep_translator import GoogleTranslator
+            return GoogleTranslator(source="ru", target=target).translate(text)
+        except Exception as e:
+            self._log(f"Перевод недоступен: {e}")
+            return None
 
-    def start(self):
-        self.running = True
-        self.btn.set("■   Стоп", RED, "#f7a8bf")
-        self._status(YELLOW, "Загрузка")
-        idx = int(self.device_var.get().split("]")[0].strip("[ "))
-        voice = VOICES[self.voice_var.get()]
-        model = self.model_var.get()
-        threading.Thread(target=self._run, args=(idx, voice, model), daemon=True).start()
-
-    def stop(self):
-        self.running = False
-        self.btn.set("▶   Старт", GREEN, "#b9f0b4")
-        self._status(GREY, "Остановлено")
-        self._log("Остановка.")
-        if self.recorder is not None:
-            try:
-                self.recorder.shutdown()
-            except Exception:
-                pass
-            self.recorder = None
-
-    # ---------- worker ----------
-    def _synth(self, text, voice):
+    def _synth(self, text, voice, rate):
         async def go():
-            comm = edge_tts.Communicate(text, voice)
+            comm = edge_tts.Communicate(text, voice, rate=rate)
             data = b""
             async for ch in comm.stream():
                 if ch["type"] == "audio":
@@ -235,20 +357,89 @@ class DiktorApp:
             return None, None
         return sf.read(io.BytesIO(mp3), dtype="float32")
 
-    def _run(self, device_idx, voice, model):
+    def _play(self, samples, sr, device_idx):
+        v = max(0, min(100, int(self.vol_var.get()))) / 100.0
+        with self._play_lock:
+            try:
+                sd.stop()
+                sd.play(np.asarray(samples) * v, sr, device=device_idx)
+                sd.wait()
+            except Exception as e:
+                self._log(f"Ошибка воспроизведения: {e}")
+
+    # ---------- control ----------
+    def toggle(self):
+        self.stop() if self.running else self.start()
+
+    def toggle_mute(self):
+        self.muted = not self.muted
+        if self.muted:
+            self.mute_btn.configure(text="🔇", fg_color="#3a2030")
+            if self.running:
+                self._status(YELLOW, "Пауза")
+        else:
+            self.mute_btn.configure(text="🔊", fg_color=FIELD)
+            self._status(ACCENT, "Прослушивание") if self.running else self._status(GREY, "Остановлено")
+
+    def test(self):
+        if self._testing:
+            return
+        self._testing = True
+        self.test_btn.configure(state="disabled")
+        self._save_settings()
+        voice = VOICES[self.voice_var.get()]
+        rate = SPEEDS[self.speed_var.get()]
+        idx = self._device_idx()
+        self._log("Тест: воспроизвожу проверочную фразу...")
+
+        def run():
+            try:
+                s, sr = self._synth(TEST_PHRASE, voice, rate)
+                if s is not None:
+                    self._play(s, sr, idx)
+                self._log("Тест завершён.")
+            except Exception as e:
+                self._log(f"Ошибка теста: {e}")
+            finally:
+                self._testing = False
+                self.root.after(0, lambda: self.test_btn.configure(state="normal"))
+        threading.Thread(target=run, daemon=True).start()
+
+    def start(self):
+        self.running = True
+        self.btn.configure(text="■  Стоп", fg_color=RED, hover_color=RED_H)
+        self._status(YELLOW, "Загрузка")
+        self._save_settings()
+        idx = self._device_idx()
+        model = self.model_var.get()
+        threading.Thread(target=self._run, args=(idx, model), daemon=True).start()
+
+    def stop(self):
+        self.running = False
+        self.btn.configure(text="▶  Старт", fg_color=GREEN, hover_color=GREEN_H)
+        self._status(GREY, "Остановлено")
+        self._log("Остановка.")
+        if self.recorder is not None:
+            try:
+                self.recorder.shutdown()
+            except Exception:
+                pass
+            self.recorder = None
+
+    # ---------- worker ----------
+    def _run(self, device_idx, model):
         try:
             import torch
             from RealtimeSTT import AudioToTextRecorder
         except Exception as e:
-            self._log(f"Не установлены библиотеки: {e}", "err")
-            self._status(RED, "Ошибка")
-            self.running = False
+            self._log(f"Не установлены библиотеки: {e}")
+            self._status(RED, "Ошибка"); self.running = False
             return
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         compute = "float16" if device == "cuda" else "int8"
         self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}")
-        self._log("Загружаю модель (в первый раз скачается)...")
+        self._log("Загрузка модели (при первом запуске — загрузка из интернета)...")
 
         try:
             self.recorder = AudioToTextRecorder(
@@ -257,45 +448,52 @@ class DiktorApp:
                 post_speech_silence_duration=0.4,
             )
         except Exception as e:
-            self._log(f"Ошибка запуска: {e}", "err")
-            self._status(RED, "Ошибка")
-            self.running = False
+            self._log(f"Ошибка запуска: {e}")
+            self._status(RED, "Ошибка"); self.running = False
             return
 
-        self._log("Готово. Говори!")
-        self._status(BLUE, "Слушаю")
+        self._log("Готово к работе.")
+        self._status(ACCENT, "Прослушивание")
         while self.running:
             try:
                 text = self.recorder.text()
                 if not self.running:
                     break
                 text = (text or "").strip()
-                if not text:
+                if len(text) < 2:
                     continue
-                self._log(f"› {text}", "you")
-                self._status(GREEN, "Озвучиваю")
-                samples, sr = self._synth(text, voice)
-                if samples is not None:
-                    sd.play(samples, sr, device=device_idx)
-                    sd.wait()
-                if self.running:
-                    self._status(BLUE, "Слушаю")
+                self._log(f"› {text}")
+                if self.muted:
+                    continue
+
+                tcode, tvoice = LANGUAGES.get(self.lang_var.get(), (None, None))
+                rate = SPEEDS[self.speed_var.get()]
+                if tcode:
+                    out = self._translate(text, tcode)
+                    if not out:
+                        continue
+                    self._log(f"→ {out}")
+                    out_voice = tvoice
+                else:
+                    out, out_voice = text, VOICES[self.voice_var.get()]
+
+                self._status(GREEN, "Озвучивание")
+                s, sr = self._synth(out, out_voice, rate)
+                if s is not None:
+                    self._play(s, sr, device_idx)
+                if self.running and not self.muted:
+                    self._status(ACCENT, "Прослушивание")
             except Exception as e:
-                self._log(f"Пропуск: {e}", "err")
+                self._log(f"Пропущено: {e}")
                 continue
 
-
-def _resource(name):
-    # works both when run as .py and when bundled by PyInstaller
-    import os, sys
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, name)
 
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
-    root = tk.Tk()
-    
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+    root = ctk.CTk()
     try:
         root.iconbitmap(_resource("icon.ico"))
     except Exception:
