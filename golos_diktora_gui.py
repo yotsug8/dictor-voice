@@ -145,7 +145,7 @@ class DiktorApp:
         self.speed_var = ctk.StringVar(value=g("speed", "Обычная", SPEEDS))
         self.lang_var = ctk.StringVar(value=g("lang", list(LANGUAGES)[0], LANGUAGES))
         self.vol_var = ctk.IntVar(value=int(self.cfg.get("volume", 100)))
-        self.sil_var = ctk.DoubleVar(value=float(self.cfg.get("silence", 0.3)))
+        self.sil_var = ctk.DoubleVar(value=float(self.cfg.get("silence", 0.2)))
 
         devices = self._devices()
         dev0 = self.cfg.get("device") if self.cfg.get("device") in devices else self._default_device(devices)
@@ -175,7 +175,7 @@ class DiktorApp:
         ctk.CTkLabel(silcap, text="Задержка перед озвучкой", text_color=SUB, font=(FONT, 12)).pack(side="left")
         self.sil_lbl = ctk.CTkLabel(silcap, text=f"{self.sil_var.get():.1f} с", text_color=ACCENT, font=(FONT, 12))
         self.sil_lbl.pack(side="right")
-        ctk.CTkSlider(card, from_=0.2, to=1.5, variable=self.sil_var, number_of_steps=13,
+        ctk.CTkSlider(card, from_=0.1, to=0.6, variable=self.sil_var, number_of_steps=10,
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
                       fg_color=FIELD, command=self._on_sil).grid(row=7, column=0, columnspan=2, sticky="ew", padx=18)
 
