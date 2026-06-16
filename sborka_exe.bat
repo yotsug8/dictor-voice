@@ -20,13 +20,12 @@ pyinstaller --onedir --windowed --name Diktor ^
  --collect-all RealtimeSTT ^
  --collect-all edge_tts ^
  --collect-all customtkinter ^
- --collect-all customtkinter ^
  --collect-all deep_translator ^
  --collect-all pystray ^
  golos_diktora_gui.py
 
 echo.
 echo ============================================
-echo   Gotovo! EXE lezhit v papke: dist\Diktor.exe
+echo   Gotovo! EXE lezhit v papke: dist\Diktor\Diktor.exe
 echo ============================================
 pause

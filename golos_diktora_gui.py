@@ -63,6 +63,8 @@ class DiktorApp:
         self.recorder = None
         self.device_map = {}
         self._play_lock = threading.Lock()
+        self._loop = asyncio.new_event_loop()
+        threading.Thread(target=self._loop.run_forever, daemon=True).start()
         self._testing = False
         self.tray = None
         self.ui_queue = queue.Queue()
@@ -127,7 +129,9 @@ class DiktorApp:
         card.columnconfigure(0, weight=1)
         card.columnconfigure(1, weight=1)
 
-        g = lambda k, d, pool: self.cfg.get(k) if self.cfg.get(k) in pool else d
+        def g(k, d, pool):
+            v = self.cfg.get(k)
+            return v if v in pool else d
         self.voice_var = ctk.StringVar(value=g("voice", list(VOICES)[0], VOICES))
         self.model_var = ctk.StringVar(value=g("model", "small", MODELS))
         self.speed_var = ctk.StringVar(value=g("speed", "Обычная", SPEEDS))
@@ -307,6 +311,7 @@ class DiktorApp:
                 self.tray.stop()
             except Exception:
                 pass
+        self._loop.call_soon_threadsafe(self._loop.stop)
         self.root.destroy()
 
     # ---------- hotkey ----------
@@ -337,12 +342,21 @@ class DiktorApp:
 
     # ---------- audio / translate ----------
     def _translate(self, text, target):
-        try:
+        import concurrent.futures
+        def do():
             from deep_translator import GoogleTranslator
             return GoogleTranslator(source="ru", target=target).translate(text)
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            return ex.submit(do).result(timeout=10)
+        except concurrent.futures.TimeoutError:
+            self._log("Перевод: нет ответа от сервера (таймаут 10 с)")
+            return None
         except Exception as e:
             self._log(f"Перевод недоступен: {e}")
             return None
+        finally:
+            ex.shutdown(wait=False)
 
     def _synth(self, text, voice, rate):
         async def go():
@@ -352,7 +366,10 @@ class DiktorApp:
                 if ch["type"] == "audio":
                     data += ch["data"]
             return data
-        mp3 = asyncio.run(go())
+        try:
+            mp3 = asyncio.run_coroutine_threadsafe(go(), self._loop).result(timeout=15)
+        except Exception:
+            return None, None
         if not mp3:
             return None, None
         return sf.read(io.BytesIO(mp3), dtype="float32")
