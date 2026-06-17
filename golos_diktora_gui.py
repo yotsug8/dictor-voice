@@ -341,8 +341,10 @@ class DiktorApp:
             import keyboard
             keyboard.add_hotkey("f8", lambda: self.root.after(0, self.toggle_mute))
             keyboard.add_hotkey("f9", lambda: self.root.after(0, self.toggle))
-        except Exception:
-            pass
+            self._log("Горячие клавиши F8 (пауза) и F9 (старт/стоп) активны.")
+        except Exception as e:
+            self._log(f"Горячие клавиши не работают: {e}")
+            self._log("Если не помогает — запустите Diktor.exe от имени администратора.")
 
     # ---------- ui queue ----------
     def _log(self, msg):
