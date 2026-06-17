@@ -22,6 +22,7 @@ pyinstaller --onedir --windowed --name Diktor ^
  --collect-all customtkinter ^
  --collect-all deep_translator ^
  --collect-all pystray ^
+ --collect-all keyboard ^
  golos_diktora_gui.py
 
 echo.

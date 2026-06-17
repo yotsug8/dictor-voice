@@ -23,6 +23,7 @@ VOICES = {
     "Светлана (женский)": "ru-RU-SvetlanaNeural",
 }
 MODELS = ["tiny", "base", "small", "medium"]
+MODEL_BEAM = {"tiny": 1, "base": 1, "small": 3, "medium": 5}
 SPEEDS = {"Медленно": "-25%", "Обычная": "+0%", "Быстро": "+25%"}
 # display -> (код перевода, голос для озвучки перевода)
 LANGUAGES = {
@@ -31,9 +32,16 @@ LANGUAGES = {
     "Немецкий": ("de", "de-DE-KillianNeural"),
     "Французский": ("fr", "fr-FR-HenriNeural"),
     "Испанский": ("es", "es-ES-AlvaroNeural"),
+    "Итальянский": ("it", "it-IT-DiegoNeural"),
+    "Португальский": ("pt", "pt-BR-AntonioNeural"),
+    "Польский": ("pl", "pl-PL-MarekNeural"),
+    "Японский": ("ja", "ja-JP-KeitaNeural"),
+    "Корейский": ("ko", "ko-KR-InJoonNeural"),
     "Китайский": ("zh-CN", "zh-CN-YunxiNeural"),
+    "Турецкий": ("tr", "tr-TR-AhmetNeural"),
 }
 TEST_PHRASE = "Проверка связи. Это голос диктора."
+WHISPER_PROMPT = "Привет. Да, конечно. Хорошо, понятно. Спасибо. Сегодня хорошая погода."
 FONT = "Segoe UI"
 
 
@@ -185,7 +193,7 @@ class DiktorApp:
                                       fg_color=FIELD, hover_color="#34344a", text_color=TEXT,
                                       corner_radius=14, font=(FONT, 13, "bold"))
         self.test_btn.pack(side="left", padx=5)
-        ctk.CTkLabel(self.root, text="F8 — пауза звука   •   крестик сворачивает в трей",
+        ctk.CTkLabel(self.root, text="F8 — пауза звука   •   F9 — старт/стоп   •   крестик сворачивает в трей",
                      text_color=GREY, font=(FONT, 10)).pack(pady=(2, 2))
 
         self.topmost_var = ctk.BooleanVar(value=bool(self.cfg.get("topmost", False)))
@@ -319,12 +327,15 @@ class DiktorApp:
         try:
             import keyboard
             keyboard.add_hotkey("f8", lambda: self.root.after(0, self.toggle_mute))
+            keyboard.add_hotkey("f9", lambda: self.root.after(0, self.toggle))
         except Exception:
             pass
 
     # ---------- ui queue ----------
     def _log(self, msg):
-        self.ui_queue.put(("log", msg))
+        import datetime
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        self.ui_queue.put(("log", f"[{ts}] {msg}"))
 
     def _status(self, color, label):
         self.ui_queue.put(("status", (color, label)))
@@ -455,7 +466,8 @@ class DiktorApp:
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         compute = "float16" if device == "cuda" else "int8"
-        self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}")
+        beam = MODEL_BEAM.get(model, 5)
+        self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}  |  beam: {beam}")
         self._log("Загрузка модели (при первом запуске — загрузка из интернета)...")
 
         try:
@@ -463,6 +475,8 @@ class DiktorApp:
                 model=model, language="ru", spinner=False,
                 device=device, compute_type=compute,
                 post_speech_silence_duration=0.4,
+                beam_size=beam,
+                initial_prompt=WHISPER_PROMPT,
             )
         except Exception as e:
             self._log(f"Ошибка запуска: {e}")
@@ -471,6 +485,7 @@ class DiktorApp:
 
         self._log("Готово к работе.")
         self._status(ACCENT, "Прослушивание")
+        last_text = ""
         while self.running:
             try:
                 text = self.recorder.text()
@@ -479,6 +494,9 @@ class DiktorApp:
                 text = (text or "").strip()
                 if len(text) < 2:
                     continue
+                if text == last_text:
+                    continue
+                last_text = text
                 self._log(f"› {text}")
                 if self.muted:
                     continue
