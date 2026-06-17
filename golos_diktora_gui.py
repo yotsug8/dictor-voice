@@ -6,16 +6,38 @@ import asyncio
 import threading
 import queue
 
-# В собранном .exe (PyInstaller) урезанный модуль site не создаёт встроенные
-# help/exit/quit/license и т.п. Некоторые библиотеки RVC ссылаются на help,
-# что без этого роняет конверсию с "name 'help' is not defined". Восстанавливаем.
+# В собранном .exe (PyInstaller) урезанный модуль site не создаёт интерактивные
+# встроенные help/exit/quit/license/credits/copyright. Библиотеки RVC ссылаются
+# на них (видели "name 'help' is not defined"), что роняет конверсию. Возвращаем
+# их все сразу, чтобы не ловить такие ошибки по одной.
 import builtins as _builtins
+
 if not hasattr(_builtins, "help"):
     try:
         import pydoc
         _builtins.help = pydoc.help
     except Exception:
         _builtins.help = lambda *a, **k: None
+
+class _ExitProxy:
+    def __repr__(self):
+        return "Use exit() or Ctrl-Z plus Return to exit"
+    def __call__(self, code=None):
+        raise SystemExit(code)
+
+for _name in ("exit", "quit"):
+    if not hasattr(_builtins, _name):
+        setattr(_builtins, _name, _ExitProxy())
+
+class _PrinterProxy:
+    def __repr__(self):
+        return ""
+    def __call__(self, *a, **k):
+        return None
+
+for _name in ("license", "credits", "copyright"):
+    if not hasattr(_builtins, _name):
+        setattr(_builtins, _name, _PrinterProxy())
 
 import numpy as np
 import sounddevice as sd
