@@ -5,6 +5,8 @@
 - ctranslate2 — MIT License
 - edge-tts — GPL-3.0 License
 - silero-vad — MIT License
+- webrtcvad — BSD-3-Clause License
+- pvporcupine (Porcupine, Picovoice) — Apache-2.0 License
 - PyTorch (torch, torchaudio) — BSD-style License
 - sounddevice — MIT License
 - soundfile — BSD License
