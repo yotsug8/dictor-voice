@@ -32,6 +32,11 @@ MANIFEST
 *.manifest
 *.spec
 
+# Diktor: runtime settings + voice model weights (too large/local to commit)
+settings.json
+voices/*.pth
+voices/*.index
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
