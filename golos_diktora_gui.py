@@ -56,6 +56,9 @@ def _resource(name):
 
 
 SETTINGS_FILE = os.path.join(_base_dir(), "settings.json")
+VOICES_DIR = os.path.join(_base_dir(), "voices")
+# базовый голос Edge TTS, поверх которого RVC накладывает тембр персонажа
+RVC_BASE_VOICE = "ru-RU-DmitryNeural"
 
 
 class DiktorApp:
@@ -78,6 +81,8 @@ class DiktorApp:
         self.ui_queue = queue.Queue()
         self.mic_level = 0.0
         self._mic_stream = None
+        self._rvc_warned = False
+        self.rvc_voices = self._scan_rvc_voices()
         self.cfg = self._load_settings()
 
         self._build()
@@ -143,7 +148,8 @@ class DiktorApp:
         def g(k, d, pool):
             v = self.cfg.get(k)
             return v if v in pool else d
-        self.voice_var = ctk.StringVar(value=g("voice", list(VOICES)[0], VOICES))
+        voice_names = list(VOICES) + list(self.rvc_voices)
+        self.voice_var = ctk.StringVar(value=g("voice", list(VOICES)[0], voice_names))
         self.model_var = ctk.StringVar(value=g("model", "small", MODELS))
         self.speed_var = ctk.StringVar(value=g("speed", "Обычная", SPEEDS))
         self.lang_var = ctk.StringVar(value=g("lang", list(LANGUAGES)[0], LANGUAGES))
@@ -154,7 +160,7 @@ class DiktorApp:
         self.device_var = ctk.StringVar(value=dev0)
 
         self._cap(card, "Голос диктора").grid(row=0, column=0, sticky="ew", padx=(18, 9), pady=(16, 2))
-        self._menu(card, self.voice_var, list(VOICES)).grid(row=1, column=0, sticky="ew", padx=(18, 9))
+        self._menu(card, self.voice_var, voice_names).grid(row=1, column=0, sticky="ew", padx=(18, 9))
         self._cap(card, "Точность (модель)").grid(row=0, column=1, sticky="ew", padx=(9, 18), pady=(16, 2))
         self._menu(card, self.model_var, MODELS).grid(row=1, column=1, sticky="ew", padx=(9, 18))
 
@@ -401,6 +407,34 @@ class DiktorApp:
             pass
         self.root.after(80, self._drain)
 
+    # ---------- voices (RVC) ----------
+    def _scan_rvc_voices(self):
+        """Ищет модели голосов (.pth) в папке voices/ рядом с программой."""
+        found = {}
+        try:
+            if os.path.isdir(VOICES_DIR):
+                for f in sorted(os.listdir(VOICES_DIR)):
+                    if f.lower().endswith(".pth"):
+                        stem = os.path.splitext(f)[0]
+                        found[f"🎭 {stem}"] = os.path.join(VOICES_DIR, f)
+        except Exception:
+            pass
+        return found
+
+    def _resolve_voice(self, display):
+        """display -> (голос Edge TTS для синтеза, путь к RVC-модели или None)."""
+        if display in self.rvc_voices:
+            return RVC_BASE_VOICE, self.rvc_voices[display]
+        return VOICES.get(display, list(VOICES.values())[0]), None
+
+    def _convert_rvc(self, samples, sr, model_path):
+        """Каркас: движок RVC ещё не подключён — возвращаем звук без изменений."""
+        if not self._rvc_warned:
+            self._log("RVC-голоса: каркас готов, движок конверсии пока не установлен — "
+                      "играю базовым голосом. Модели кладите в папку voices/.")
+            self._rvc_warned = True
+        return samples, sr
+
     # ---------- audio / translate ----------
     def _translate(self, text, target):
         import concurrent.futures
@@ -465,14 +499,16 @@ class DiktorApp:
         self._testing = True
         self.test_btn.configure(state="disabled")
         self._save_settings()
-        voice = VOICES[self.voice_var.get()]
+        edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
         rate = SPEEDS[self.speed_var.get()]
         idx = self._device_idx()
         self._log("Тест: воспроизвожу проверочную фразу...")
 
         def run():
             try:
-                s, sr = self._synth(TEST_PHRASE, voice, rate)
+                s, sr = self._synth(TEST_PHRASE, edge_voice, rate)
+                if s is not None and rvc_path:
+                    s, sr = self._convert_rvc(s, sr, rvc_path)
                 if s is not None:
                     self._play(s, sr, idx)
                 self._log("Тест завершён.")
@@ -489,7 +525,7 @@ class DiktorApp:
             return
         self.text_entry.delete(0, "end")
         self._log(f"⌨ {text}")
-        voice_disp = self.voice_var.get()
+        edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
         lang_disp = self.lang_var.get()
         rate = SPEEDS[self.speed_var.get()]
         idx = self._device_idx()
@@ -504,8 +540,10 @@ class DiktorApp:
                     self._log(f"→ {out}")
                     out_voice = tvoice
                 else:
-                    out, out_voice = text, VOICES[voice_disp]
+                    out, out_voice = text, edge_voice
                 s, sr = self._synth(out, out_voice, rate)
+                if s is not None and rvc_path:
+                    s, sr = self._convert_rvc(s, sr, rvc_path)
                 if s is not None:
                     self._play(s, sr, idx)
             except Exception as e:
@@ -588,6 +626,7 @@ class DiktorApp:
 
                 tcode, tvoice = LANGUAGES.get(self.lang_var.get(), (None, None))
                 rate = SPEEDS[self.speed_var.get()]
+                edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
                 if tcode:
                     out = self._translate(text, tcode)
                     if not out:
@@ -595,10 +634,12 @@ class DiktorApp:
                     self._log(f"→ {out}")
                     out_voice = tvoice
                 else:
-                    out, out_voice = text, VOICES[self.voice_var.get()]
+                    out, out_voice = text, edge_voice
 
                 self._status(GREEN, "Озвучивание")
                 s, sr = self._synth(out, out_voice, rate)
+                if s is not None and rvc_path:
+                    s, sr = self._convert_rvc(s, sr, rvc_path)
                 if s is not None:
                     self._play(s, sr, device_idx)
                 if self.running and not self.muted:
