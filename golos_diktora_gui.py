@@ -509,9 +509,10 @@ class DiktorApp:
             return
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        compute = "float16" if device == "cuda" else "int8"
+        # float32 на обоих устройствах -> одинаковая точность распознавания
+        compute = "float32"
         beam = MODEL_BEAM.get(model, 5)
-        self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}  |  beam: {beam}")
+        self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}  |  точность: float32  |  beam: {beam}")
         self._log("Загрузка модели (при первом запуске — загрузка из интернета)...")
 
         def make_recorder():
