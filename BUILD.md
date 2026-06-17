@@ -3,36 +3,38 @@
 Инструкция для тех, кто хочет собрать `Diktor.exe` самостоятельно из исходного кода.
 Нужна ОС **Windows**.
 
-**Какой Python:**
-- Только обычные голоса диктора → подойдёт **Python 3.12**.
-- Нужны кастомные голоса персонажей (**RVC**) → обязателен **Python 3.10**.
-  Библиотека `rvc-python` тянет старые `fairseq`/`numpy`, которые не собираются
-  на 3.11/3.12. На 3.10 всё ставится из готовых wheel.
+**Какой Python:** нужен **Python 3.10** — независимо от того, нужны тебе
+кастомные голоса персонажей (RVC) или нет. Библиотека `rvc-python` тянет
+старые `fairseq`/`numpy`, которые не собираются на 3.11/3.12, поэтому проще
+сразу ставить 3.10 для всего — не нужно держать на машине две версии Python
+и думать, какая команда (`pip` / `py -3.10 -m pip`) пойдёт в какую.
 
 ## 1. Установить Python
 
-Скачай нужную версию с https://www.python.org/downloads/windows/ — файл «Windows installer (64-bit)»:
-- без RVC — Python 3.12;
-- с RVC — **Python 3.10** (например 3.10.11).
+Скачай Python 3.10 с https://www.python.org/downloads/windows/ — файл «Windows installer (64-bit)»
+(например 3.10.11).
 
 При установке обязательно поставь галочку **«Add python.exe to PATH»**.
+Если на компьютере уже стоит другая версия Python (3.11/3.12 и т.п.) — это не
+страшно, но в командах ниже используй `py -3.10`, чтобы точно работать именно
+с Python 3.10 (показано в примерах).
 
 ## 2. Установить зависимости
 
 В командной строке выполни:
-pip install RealtimeSTT edge-tts sounddevice soundfile numpy faster-whisper silero-vad packaging customtkinter deep-translator pystray pillow keyboard
+py -3.10 -m pip install RealtimeSTT edge-tts sounddevice soundfile numpy faster-whisper silero-vad packaging customtkinter deep-translator pystray pillow keyboard
 
 ## 3. Установить PyTorch
 
 Версия приложения (NVIDIA или CPU) определяется тем, какой PyTorch установлен.
 
 - С видеокартой **NVIDIA** (быстрее):
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+py -3.10 -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 - **Без** видеокарты NVIDIA (работает у всех, медленнее):
-pip install torch torchaudio
+py -3.10 -m pip install torch torchaudio
 
 Проверить, какой режим получится:
-python -c "import torch; print(torch.cuda.is_available())"
+py -3.10 -c "import torch; print(torch.cuda.is_available())"
 `True` — будет использоваться видеокарта, `False` — процессор.
 
 ## 3a. (Необязательно) Кастомные голоса персонажей — RVC
@@ -40,10 +42,11 @@ python -c "import torch; print(torch.cuda.is_available())"
 Нужно только если хочешь голоса персонажей через папку `voices/`. Без этого
 программа работает на обычных голосах диктора.
 
-**Требуется Python 3.10** (см. начало инструкции) и видеокарта **NVIDIA**.
+Требуется видеокарта **NVIDIA** (на CPU конверсия слишком медленная для
+реального времени).
 
 Установка:
-pip install rvc-python
+py -3.10 -m pip install rvc-python
 
 - Если `pip` начнёт собирать `fairseq` из исходников и ругнётся на отсутствие
   компилятора — поставь **Microsoft C++ Build Tools**
@@ -52,10 +55,9 @@ pip install rvc-python
 - При первом использовании RVC докачивает базовые модели (HuBERT, RMVPE) из интернета (~400 МБ).
 - Модели голосов (.pth, по желанию .index) скачиваются с weights.gg / AI Hub и кладутся в папку `voices/`.
   Файл .index класть рядом с .pth — он заметно улучшает качество.
-- На CPU конверсия слишком медленная для реального времени — нужна NVIDIA.
 
 Проверка после установки:
-python -c "from rvc_python.infer import RVCInference; print('rvc ok')"
+py -3.10 -c "from rvc_python.infer import RVCInference; print('rvc ok')"
 
 ## 4. Собрать приложение
 

@@ -4,15 +4,14 @@ echo   Sborka Golos Diktora v EXE
 echo ============================================
 echo.
 
-set PYCMD=python
+set PYCMD=py -3.10
 set RVC_FLAGS=
 py -3.10 -c "import rvc_python" 2>nul
 if not errorlevel 1 (
-    echo Naiden rvc-python pod Python 3.10 - sobirau s podderzhkoy golosov personazhey (RVC).
-    set PYCMD=py -3.10
+    echo Naiden rvc-python - sobirau s podderzhkoy golosov personazhey (RVC).
     set RVC_FLAGS=--collect-all rvc_python --collect-all fairseq --collect-all hydra --collect-all omegaconf --collect-all antlr4 --collect-all faiss --collect-all librosa --collect-all numba --collect-all llvmlite --collect-all torchcrepe --collect-all pyworld
 ) else (
-    echo rvc-python ne naiden pod Python 3.10 - sobirau obychnuyu versiyu, bez golosov personazhey.
+    echo rvc-python ne naiden - sobirau obychnuyu versiyu, bez golosov personazhey.
     echo Esli nuzhen RVC v sborke - smotri razdel 3a v BUILD.md.
 )
 
