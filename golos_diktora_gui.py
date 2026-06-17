@@ -81,7 +81,10 @@ class DiktorApp:
         self.ui_queue = queue.Queue()
         self.mic_level = 0.0
         self._mic_stream = None
-        self._rvc_warned = False
+        self._rvc = None
+        self._rvc_loaded_path = None
+        self._rvc_failed = False
+        self._rvc_lock = threading.Lock()
         self.rvc_voices = self._scan_rvc_voices()
         self.cfg = self._load_settings()
 
@@ -427,13 +430,67 @@ class DiktorApp:
             return RVC_BASE_VOICE, self.rvc_voices[display]
         return VOICES.get(display, list(VOICES.values())[0]), None
 
+    def _find_index(self, pth_path):
+        """Ищет .index рядом с .pth: сначала по совпадению имени, иначе любой."""
+        try:
+            d = os.path.dirname(pth_path)
+            stem = os.path.splitext(os.path.basename(pth_path))[0]
+            cands = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(".index")]
+            for c in cands:
+                if stem.lower() in os.path.basename(c).lower():
+                    return c
+            return cands[0] if cands else ""
+        except Exception:
+            return ""
+
+    def _ensure_rvc(self, model_path):
+        """Лениво создаёт движок и (пере)загружает модель. Кэширует между фразами."""
+        import torch
+        from rvc_python.infer import RVCInference
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        if self._rvc is None:
+            self._log("RVC: инициализация движка (первый запуск может качать базовые модели)...")
+            self._rvc = RVCInference(device=device)
+        if self._rvc_loaded_path != model_path:
+            index = self._find_index(model_path)
+            try:
+                self._rvc.load_model(model_path, index_path=index)
+            except TypeError:
+                self._rvc.load_model(model_path)
+            try:
+                self._rvc.set_params(f0method="rmvpe")
+            except Exception:
+                pass
+            self._rvc_loaded_path = model_path
+            self._log(f"RVC: модель загружена ({os.path.basename(model_path)}).")
+
     def _convert_rvc(self, samples, sr, model_path):
-        """Каркас: движок RVC ещё не подключён — возвращаем звук без изменений."""
-        if not self._rvc_warned:
-            self._log("RVC-голоса: каркас готов, движок конверсии пока не установлен — "
-                      "играю базовым голосом. Модели кладите в папку voices/.")
-            self._rvc_warned = True
-        return samples, sr
+        """Накладывает тембр RVC-модели на синтезированный звук. При сбое — базовый голос."""
+        if self._rvc_failed:
+            return samples, sr
+        import tempfile
+        with self._rvc_lock:
+            in_path = out_path = None
+            try:
+                self._ensure_rvc(model_path)
+                fd_in, in_path = tempfile.mkstemp(suffix=".wav"); os.close(fd_in)
+                fd_out, out_path = tempfile.mkstemp(suffix=".wav"); os.close(fd_out)
+                sf.write(in_path, samples, sr)
+                self._rvc.infer_file(in_path, out_path)
+                out, out_sr = sf.read(out_path, dtype="float32")
+                return out, out_sr
+            except Exception as e:
+                self._rvc_failed = True
+                self._log(f"RVC-конверсия недоступна ({e}). Играю базовым голосом; "
+                          f"проверьте установку rvc-python и видеокарту.")
+                return samples, sr
+            finally:
+                for p in (in_path, out_path):
+                    if p:
+                        try:
+                            os.remove(p)
+                        except Exception:
+                            pass
 
     # ---------- audio / translate ----------
     def _translate(self, text, target):
