@@ -62,8 +62,8 @@ class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("560x830")
-        self.root.minsize(520, 780)
+        self.root.geometry("560x895")
+        self.root.minsize(520, 845)
         self.root.configure(fg_color=BG)
 
         self.running = False
@@ -201,6 +201,19 @@ class DiktorApp:
                       command=self._apply_topmost, progress_color=ACCENT,
                       text_color=SUB, font=(FONT, 11)).pack(pady=(0, 2))
         self._apply_topmost()
+
+        inrow = ctk.CTkFrame(self.root, fg_color="transparent")
+        inrow.pack(fill="x", padx=26, pady=(8, 2))
+        inrow.columnconfigure(0, weight=1)
+        self.text_entry = ctk.CTkEntry(inrow, placeholder_text="Введите текст и нажмите Enter — диктор озвучит…",
+                                       fg_color=FIELD, text_color=TEXT, border_width=0,
+                                       corner_radius=10, font=(FONT, 12), height=40)
+        self.text_entry.grid(row=0, column=0, sticky="ew")
+        self.text_entry.bind("<Return>", lambda e: self._say_typed())
+        self.say_btn = ctk.CTkButton(inrow, text="Озвучить", width=92, height=40, command=self._say_typed,
+                                     fg_color=ACCENT, hover_color=ACC_HOV, text_color="#0c1410",
+                                     corner_radius=10, font=(FONT, 12, "bold"))
+        self.say_btn.grid(row=0, column=1, padx=(8, 0))
 
         labrow = ctk.CTkFrame(self.root, fg_color="transparent")
         labrow.pack(fill="x", padx=30, pady=(8, 4))
@@ -431,6 +444,35 @@ class DiktorApp:
             finally:
                 self._testing = False
                 self.root.after(0, lambda: self.test_btn.configure(state="normal"))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _say_typed(self):
+        text = self.text_entry.get().strip()
+        if not text:
+            return
+        self.text_entry.delete(0, "end")
+        self._log(f"⌨ {text}")
+        voice_disp = self.voice_var.get()
+        lang_disp = self.lang_var.get()
+        rate = SPEEDS[self.speed_var.get()]
+        idx = self._device_idx()
+
+        def run():
+            try:
+                tcode, tvoice = LANGUAGES.get(lang_disp, (None, None))
+                if tcode:
+                    out = self._translate(text, tcode)
+                    if not out:
+                        return
+                    self._log(f"→ {out}")
+                    out_voice = tvoice
+                else:
+                    out, out_voice = text, VOICES[voice_disp]
+                s, sr = self._synth(out, out_voice, rate)
+                if s is not None:
+                    self._play(s, sr, idx)
+            except Exception as e:
+                self._log(f"Ошибка озвучки текста: {e}")
         threading.Thread(target=run, daemon=True).start()
 
     def start(self):
