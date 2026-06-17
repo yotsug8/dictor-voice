@@ -72,6 +72,7 @@ class DiktorApp:
         self.running = False
         self.muted = False
         self.recorder = None
+        self._model_switch_pending = False
         self.device_map = {}
         self._play_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
@@ -153,6 +154,7 @@ class DiktorApp:
         voice_names = list(VOICES) + list(self.rvc_voices)
         self.voice_var = ctk.StringVar(value=g("voice", list(VOICES)[0], voice_names))
         self.model_var = ctk.StringVar(value=g("model", "small", MODELS))
+        self.model_var.trace_add("write", self._on_model_change)
         self.speed_var = ctk.StringVar(value=g("speed", "Обычная", SPEEDS))
         self.lang_var = ctk.StringVar(value=g("lang", list(LANGUAGES)[0], LANGUAGES))
         self.vol_var = ctk.IntVar(value=int(self.cfg.get("volume", 100)))
@@ -550,6 +552,17 @@ class DiktorApp:
     def toggle(self):
         self.stop() if self.running else self.start()
 
+    def _on_model_change(self, *args):
+        if not self.running or self.recorder is None:
+            return
+        self._model_switch_pending = True
+        self._log(f"Меняю модель распознавания на «{self.model_var.get()}»...")
+        self._status(YELLOW, "Перезапуск")
+        try:
+            self.recorder.shutdown()
+        except Exception:
+            pass
+
     def toggle_mute(self):
         self.muted = not self.muted
         if self.muted:
@@ -623,8 +636,7 @@ class DiktorApp:
         self._status(YELLOW, "Загрузка")
         self._save_settings()
         self._start_mic_monitor()
-        model = self.model_var.get()
-        threading.Thread(target=self._run, args=(model,), daemon=True).start()
+        threading.Thread(target=self._run, daemon=True).start()
 
     def stop(self):
         self.running = False
@@ -640,7 +652,7 @@ class DiktorApp:
             self.recorder = None
 
     # ---------- worker ----------
-    def _run(self, model):
+    def _run(self):
         try:
             import torch
             from RealtimeSTT import AudioToTextRecorder
@@ -652,11 +664,13 @@ class DiktorApp:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         # float32 на обоих устройствах -> одинаковая точность распознавания
         compute = "float32"
-        beam = MODEL_BEAM.get(model, 5)
-        self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}  |  точность: float32  |  beam: {beam}")
+        self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}")
         self._log("Загрузка модели (при первом запуске — загрузка из интернета)...")
 
         def make_recorder():
+            model = self.model_var.get()
+            beam = MODEL_BEAM.get(model, 5)
+            self._log(f"Модель: {model}  |  точность: float32  |  beam: {beam}")
             return AudioToTextRecorder(
                 model=model, language="ru", spinner=False,
                 device=device, compute_type=compute,
@@ -713,6 +727,19 @@ class DiktorApp:
                 if self.running and not self.muted:
                     self._status(ACCENT, "Прослушивание")
             except Exception as e:
+                if self._model_switch_pending and self.running:
+                    self._model_switch_pending = False
+                    try:
+                        self.recorder = make_recorder()
+                        errors = 0
+                        last_text = ""
+                        self._log("Модель распознавания обновлена.")
+                        self._status(ACCENT, "Прослушивание")
+                    except Exception as e2:
+                        self._log(f"Не удалось сменить модель: {e2}")
+                        self._status(RED, "Ошибка"); self.running = False
+                        break
+                    continue
                 self._log(f"Пропущено: {e}")
                 errors += 1
                 if errors >= 5 and self.running:
