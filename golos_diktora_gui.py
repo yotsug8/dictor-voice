@@ -44,8 +44,8 @@ for _name in ("license", "credits", "copyright"):
 # .write() не проверяя это и роняет приложение AttributeError'ом, маскируя
 # настоящую ошибку. Подставляем заглушки, которые просто проглатывают вывод.
 class _NullStream:
-    def write(self, *a, **k):
-        return 0
+    def write(self, s="", *a, **k):
+        return len(s) if isinstance(s, (str, bytes, bytearray)) else 0
     def flush(self):
         pass
     def isatty(self):
