@@ -16,14 +16,20 @@
 - Pillow — HPND License
 - keyboard — MIT License
 
-Дополнительно (только если используются кастомные голоса персонажей —
-RVC, см. voices/README.txt и BUILD.md, в стандартную сборку .exe не входит):
+Дополнительно (кастомные голоса персонажей — RVC, см. voices/README.txt и
+BUILD.md; входит в NVIDIA-сборку, в CPU-сборке отсутствует):
 
 - rvc-python — MIT License
 - fairseq — MIT License
+- hydra-core — MIT License
+- omegaconf — BSD-3-Clause License
+- antlr4-python3-runtime — BSD-3-Clause License
 - faiss-cpu — MIT License
 - librosa — ISC License
 - numba — BSD-2-Clause License
+- llvmlite — BSD-2-Clause License
+- torchcrepe — MIT License
+- pyworld — MIT License
 
 Виртуальный микрофон VB-Cable (VB-Audio) в сборку не входит и
 устанавливается пользователем отдельно: https://vb-audio.com/Cable/
