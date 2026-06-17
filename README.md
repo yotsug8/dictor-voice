@@ -9,8 +9,8 @@
 
 ## Скачать
 
-- **Видеокарта NVIDIA** → [Diktor-NVIDIA.zip](https://drive.google.com/file/d/1Wlzu2UZX5vxc6VEXWZfGJnkM8mUTNaYE/view?usp=sharing) (быстрее, с Google Drive)
-- **Без видеокарты NVIDIA** → `Diktor-CPU.zip` в разделе [Releases](https://github.com/yotsug8/dictor-voice/releases) (работает у всех, медленнее)
+- **Видеокарта NVIDIA** → [Diktor-NVIDIA_v1.2.zip](https://drive.google.com/file/d/1Wlzu2UZX5vxc6VEXWZfGJnkM8mUTNaYE/view?usp=sharing) (быстрее, с Google Drive)
+- **Без видеокарты NVIDIA** → `Diktor-CPU_v1.2.zip` в разделе [Releases](https://github.com/yotsug8/dictor-voice/releases) (работает у всех, медленнее)
 
 > При скачивании NVIDIA-версии Google Drive может предупредить «не удалось проверить на вирусы» (из-за размера) — это нормально, нажмите «Скачать всё равно».
 
