@@ -470,14 +470,17 @@ class DiktorApp:
         self._log(f"Устройство: {'видеокарта (cuda)' if device=='cuda' else 'процессор (cpu)'}  |  beam: {beam}")
         self._log("Загрузка модели (при первом запуске — загрузка из интернета)...")
 
-        try:
-            self.recorder = AudioToTextRecorder(
+        def make_recorder():
+            return AudioToTextRecorder(
                 model=model, language="ru", spinner=False,
                 device=device, compute_type=compute,
                 post_speech_silence_duration=0.4,
                 beam_size=beam,
                 initial_prompt=WHISPER_PROMPT,
             )
+
+        try:
+            self.recorder = make_recorder()
         except Exception as e:
             self._log(f"Ошибка запуска: {e}")
             self._status(RED, "Ошибка"); self.running = False
@@ -486,11 +489,13 @@ class DiktorApp:
         self._log("Готово к работе.")
         self._status(ACCENT, "Прослушивание")
         last_text = ""
+        errors = 0
         while self.running:
             try:
                 text = self.recorder.text()
                 if not self.running:
                     break
+                errors = 0
                 text = (text or "").strip()
                 if len(text) < 2:
                     continue
@@ -520,6 +525,23 @@ class DiktorApp:
                     self._status(ACCENT, "Прослушивание")
             except Exception as e:
                 self._log(f"Пропущено: {e}")
+                errors += 1
+                if errors >= 5 and self.running:
+                    self._log("Слишком много ошибок подряд — перезапуск распознавания...")
+                    self._status(YELLOW, "Перезапуск")
+                    try:
+                        self.recorder.shutdown()
+                    except Exception:
+                        pass
+                    try:
+                        self.recorder = make_recorder()
+                        errors = 0
+                        self._log("Распознавание перезапущено.")
+                        self._status(ACCENT, "Прослушивание")
+                    except Exception as e2:
+                        self._log(f"Не удалось перезапустить: {e2}")
+                        self._status(RED, "Ошибка"); self.running = False
+                        break
                 continue
 
 
