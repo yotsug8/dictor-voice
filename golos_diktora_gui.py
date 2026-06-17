@@ -419,7 +419,7 @@ class DiktorApp:
                 for f in sorted(os.listdir(VOICES_DIR)):
                     if f.lower().endswith(".pth"):
                         stem = os.path.splitext(f)[0]
-                        found[f"🎭 {stem}"] = os.path.join(VOICES_DIR, f)
+                        found[f"[Персонаж] {stem}"] = os.path.join(VOICES_DIR, f)
         except Exception:
             pass
         return found
