@@ -4,6 +4,12 @@ echo   Sborka Golos Diktora v EXE
 echo ============================================
 echo.
 
+echo Ochishchau staruyu sborku (build, dist, Diktor.spec)...
+if exist build rd /s /q build
+if exist dist rd /s /q dist
+if exist Diktor.spec del /q Diktor.spec
+echo.
+
 set PYCMD=py -3.10
 set RVC_FLAGS=
 py -3.10 -c "import rvc_python" 2>nul

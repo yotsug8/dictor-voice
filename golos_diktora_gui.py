@@ -84,7 +84,7 @@ class DiktorApp:
         self._mic_stream = None
         self._rvc = None
         self._rvc_loaded_path = None
-        self._rvc_failed = False
+        self._rvc_failed_paths = set()
         self._rvc_lock = threading.Lock()
         self.rvc_voices = self._scan_rvc_voices()
         self.cfg = self._load_settings()
@@ -153,15 +153,19 @@ class DiktorApp:
             return v if v in pool else d
         voice_names = list(VOICES) + list(self.rvc_voices)
         self.voice_var = ctk.StringVar(value=g("voice", list(VOICES)[0], voice_names))
+        self.voice_var.trace_add("write", self._on_setting_change)
         self.model_var = ctk.StringVar(value=g("model", "small", MODELS))
         self.model_var.trace_add("write", self._on_model_change)
         self.speed_var = ctk.StringVar(value=g("speed", "Обычная", SPEEDS))
+        self.speed_var.trace_add("write", self._on_setting_change)
         self.lang_var = ctk.StringVar(value=g("lang", list(LANGUAGES)[0], LANGUAGES))
+        self.lang_var.trace_add("write", self._on_setting_change)
         self.vol_var = ctk.IntVar(value=int(self.cfg.get("volume", 100)))
 
         devices = self._devices()
         dev0 = self.cfg.get("device") if self.cfg.get("device") in devices else self._default_device(devices)
         self.device_var = ctk.StringVar(value=dev0)
+        self.device_var.trace_add("write", self._on_setting_change)
 
         self._cap(card, "Голос диктора").grid(row=0, column=0, sticky="ew", padx=(18, 9), pady=(16, 2))
         self._menu(card, self.voice_var, voice_names).grid(row=1, column=0, sticky="ew", padx=(18, 9))
@@ -299,14 +303,19 @@ class DiktorApp:
             self.device_var.set(self._default_device(devices))
         self._log("Список устройств обновлён.")
 
+    def _on_setting_change(self, *args):
+        self._save_settings()
+
     def _on_vol(self, val):
         self.vol_lbl.configure(text=f"{int(float(val))}%")
+        self._save_settings()
 
     def _apply_topmost(self):
         try:
             self.root.attributes("-topmost", bool(self.topmost_var.get()))
         except Exception:
             pass
+        self._save_settings()
 
     def _clear_log(self):
         try:
@@ -478,7 +487,7 @@ class DiktorApp:
 
     def _convert_rvc(self, samples, sr, model_path):
         """Накладывает тембр RVC-модели на синтезированный звук. При сбое — базовый голос."""
-        if self._rvc_failed:
+        if model_path in self._rvc_failed_paths:
             return samples, sr
         import tempfile
         with self._rvc_lock:
@@ -492,7 +501,7 @@ class DiktorApp:
                 out, out_sr = sf.read(out_path, dtype="float32")
                 return out, out_sr
             except Exception as e:
-                self._rvc_failed = True
+                self._rvc_failed_paths.add(model_path)
                 self._log(f"RVC-конверсия недоступна ({e}). Играю базовым голосом; "
                           f"проверьте установку rvc-python и видеокарту.")
                 return samples, sr
@@ -553,6 +562,7 @@ class DiktorApp:
         self.stop() if self.running else self.start()
 
     def _on_model_change(self, *args):
+        self._save_settings()
         if not self.running or self.recorder is None:
             return
         self._model_switch_pending = True
