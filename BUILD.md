@@ -6,6 +6,8 @@
 ## 1. Установить Python
 
 Скачай Python 3.10.11 с https://www.python.org/downloads/windows/ — файл «Windows installer (64-bit)».
+Бери именно **3.10.11** (или новее в ветке 3.10.x): в 3.10.0 есть баг, из-за которого сборщик PyInstaller
+падает с ошибкой `IndexError: tuple index out of range`.
 
 При установке обязательно поставь галочку **«Add python.exe to PATH»**.
 
