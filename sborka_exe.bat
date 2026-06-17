@@ -44,6 +44,15 @@ echo [2/2] Sobirayu EXE (eto dolgo, mozhet zanyat 10-30 minut)...
  %RVC_FLAGS% ^
  golos_diktora_gui.py
 
+if errorlevel 1 (
+    echo.
+    echo ============================================
+    echo   OSHIBKA! Sborka NE udalas - smotri tekst oshibki vyshe.
+    echo ============================================
+    pause
+    exit /b 1
+)
+
 echo.
 echo ============================================
 echo   Gotovo! EXE lezhit v papke: dist\Diktor\Diktor.exe
