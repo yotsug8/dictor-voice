@@ -90,7 +90,6 @@ class DiktorApp:
 
         self._build()
         self.root.after(80, self._drain)
-        self._start_mic_monitor()
         self._setup_hotkey()
         self._setup_tray()
         self.root.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
@@ -354,15 +353,13 @@ class DiktorApp:
             except Exception:
                 pass
         self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._mic_stream is not None:
-            try:
-                self._mic_stream.stop(); self._mic_stream.close()
-            except Exception:
-                pass
+        self._stop_mic_monitor()
         self.root.destroy()
 
     # ---------- mic level ----------
     def _start_mic_monitor(self):
+        if self._mic_stream is not None:
+            return
         def cb(indata, frames, time_info, status):
             try:
                 self.mic_level = float(np.sqrt(np.mean(np.square(indata))))
@@ -374,6 +371,15 @@ class DiktorApp:
         except Exception as e:
             self._mic_stream = None
             self._log(f"Индикатор микрофона недоступен: {e}")
+
+    def _stop_mic_monitor(self):
+        self.mic_level = 0.0
+        if self._mic_stream is not None:
+            try:
+                self._mic_stream.stop(); self._mic_stream.close()
+            except Exception:
+                pass
+            self._mic_stream = None
 
     # ---------- hotkey ----------
     def _setup_hotkey(self):
@@ -616,12 +622,13 @@ class DiktorApp:
         self.btn.configure(text="■  Стоп", fg_color=RED, hover_color=RED_H)
         self._status(YELLOW, "Загрузка")
         self._save_settings()
-        idx = self._device_idx()
+        self._start_mic_monitor()
         model = self.model_var.get()
-        threading.Thread(target=self._run, args=(idx, model), daemon=True).start()
+        threading.Thread(target=self._run, args=(model,), daemon=True).start()
 
     def stop(self):
         self.running = False
+        self._stop_mic_monitor()
         self.btn.configure(text="▶  Старт", fg_color=GREEN, hover_color=GREEN_H)
         self._status(GREY, "Остановлено")
         self._log("Остановка.")
@@ -633,7 +640,7 @@ class DiktorApp:
             self.recorder = None
 
     # ---------- worker ----------
-    def _run(self, device_idx, model):
+    def _run(self, model):
         try:
             import torch
             from RealtimeSTT import AudioToTextRecorder
@@ -702,7 +709,7 @@ class DiktorApp:
                 if s is not None and rvc_path:
                     s, sr = self._convert_rvc(s, sr, rvc_path)
                 if s is not None:
-                    self._play(s, sr, device_idx)
+                    self._play(s, sr, self._device_idx())
                 if self.running and not self.muted:
                     self._status(ACCENT, "Прослушивание")
             except Exception as e:
