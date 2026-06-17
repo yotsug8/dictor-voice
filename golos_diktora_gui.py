@@ -457,10 +457,14 @@ class DiktorApp:
                 self._rvc.load_model(model_path, index_path=index)
             except TypeError:
                 self._rvc.load_model(model_path)
-            try:
-                self._rvc.set_params(f0method="rmvpe")
-            except Exception:
-                pass
+            # параметры передаём максимально совместимо с разными версиями API
+            for params in ({"f0method": "rmvpe", "index_path": index},
+                           {"f0method": "rmvpe"}):
+                try:
+                    self._rvc.set_params(**params)
+                    break
+                except Exception:
+                    continue
             self._rvc_loaded_path = model_path
             self._log(f"RVC: модель загружена ({os.path.basename(model_path)}).")
 
