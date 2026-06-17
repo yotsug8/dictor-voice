@@ -5,8 +5,7 @@
 
 ## 1. Установить Python
 
-Скачай Python 3.10 с https://www.python.org/downloads/windows/ — файл «Windows installer (64-bit)»
-(например 3.10.11).
+Скачай Python 3.10.11 с https://www.python.org/downloads/windows/ — файл «Windows installer (64-bit)».
 
 При установке обязательно поставь галочку **«Add python.exe to PATH»**.
 
