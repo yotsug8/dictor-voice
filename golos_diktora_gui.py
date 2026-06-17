@@ -62,8 +62,8 @@ class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("560x895")
-        self.root.minsize(520, 845)
+        self.root.geometry("560x935")
+        self.root.minsize(520, 885)
         self.root.configure(fg_color=BG)
 
         self.running = False
@@ -76,10 +76,13 @@ class DiktorApp:
         self._testing = False
         self.tray = None
         self.ui_queue = queue.Queue()
+        self.mic_level = 0.0
+        self._mic_stream = None
         self.cfg = self._load_settings()
 
         self._build()
         self.root.after(80, self._drain)
+        self._start_mic_monitor()
         self._setup_hotkey()
         self._setup_tray()
         self.root.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
@@ -169,9 +172,18 @@ class DiktorApp:
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
                       fg_color=FIELD, command=self._on_vol).grid(row=5, column=0, columnspan=2, sticky="ew", padx=18)
 
-        self._cap(card, "Куда выводить звук").grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        microw = ctk.CTkFrame(card, fg_color="transparent")
+        microw.grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        microw.columnconfigure(1, weight=1)
+        ctk.CTkLabel(microw, text="Микрофон", text_color=SUB, font=(FONT, 12)).grid(row=0, column=0, padx=(0, 10))
+        self.mic_bar = ctk.CTkProgressBar(microw, progress_color=GREEN, fg_color=FIELD,
+                                          height=12, corner_radius=6)
+        self.mic_bar.grid(row=0, column=1, sticky="ew")
+        self.mic_bar.set(0)
+
+        self._cap(card, "Куда выводить звук").grid(row=7, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
         devrow = ctk.CTkFrame(card, fg_color="transparent")
-        devrow.grid(row=7, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 18))
+        devrow.grid(row=8, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 18))
         devrow.columnconfigure(0, weight=1)
         self.device_menu = self._menu(devrow, self.device_var, devices)
         self.device_menu.grid(row=0, column=0, sticky="ew")
@@ -333,7 +345,26 @@ class DiktorApp:
             except Exception:
                 pass
         self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._mic_stream is not None:
+            try:
+                self._mic_stream.stop(); self._mic_stream.close()
+            except Exception:
+                pass
         self.root.destroy()
+
+    # ---------- mic level ----------
+    def _start_mic_monitor(self):
+        def cb(indata, frames, time_info, status):
+            try:
+                self.mic_level = float(np.sqrt(np.mean(np.square(indata))))
+            except Exception:
+                self.mic_level = 0.0
+        try:
+            self._mic_stream = sd.InputStream(channels=1, callback=cb)
+            self._mic_stream.start()
+        except Exception as e:
+            self._mic_stream = None
+            self._log(f"Индикатор микрофона недоступен: {e}")
 
     # ---------- hotkey ----------
     def _setup_hotkey(self):
@@ -364,6 +395,10 @@ class DiktorApp:
                 color, label = payload
                 self.dot.configure(text_color=color)
                 self.status_lbl.configure(text=label, text_color=color)
+        try:
+            self.mic_bar.set(min(1.0, self.mic_level * 4.0))
+        except Exception:
+            pass
         self.root.after(80, self._drain)
 
     # ---------- audio / translate ----------
