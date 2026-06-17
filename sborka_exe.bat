@@ -36,6 +36,7 @@ echo [2/2] Sobirayu EXE (eto dolgo, mozhet zanyat 10-30 minut)...
  --collect-all ctranslate2 ^
  --collect-all silero_vad ^
  --collect-all RealtimeSTT ^
+ --collect-all pvporcupine ^
  --collect-all edge_tts ^
  --collect-all customtkinter ^
  --collect-all deep_translator ^
