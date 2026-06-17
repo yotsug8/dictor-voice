@@ -39,6 +39,23 @@ for _name in ("license", "credits", "copyright"):
     if not hasattr(_builtins, _name):
         setattr(_builtins, _name, _PrinterProxy())
 
+# В сборке --windowed (без консоли) sys.stdout/sys.stderr — None. Сторонний код
+# (например, multiprocessing при выводе traceback из дочернего процесса) вызывает
+# .write() не проверяя это и роняет приложение AttributeError'ом, маскируя
+# настоящую ошибку. Подставляем заглушки, которые просто проглатывают вывод.
+class _NullStream:
+    def write(self, *a, **k):
+        return 0
+    def flush(self):
+        pass
+    def isatty(self):
+        return False
+
+if sys.stdout is None:
+    sys.stdout = _NullStream()
+if sys.stderr is None:
+    sys.stderr = _NullStream()
+
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
