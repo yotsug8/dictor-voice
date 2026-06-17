@@ -474,7 +474,7 @@ class DiktorApp:
             self.recorder = AudioToTextRecorder(
                 model=model, language="ru", spinner=False,
                 device=device, compute_type=compute,
-                post_speech_silence_duration=0.5,
+                post_speech_silence_duration=0.4,
                 beam_size=beam,
                 initial_prompt=WHISPER_PROMPT,
             )
