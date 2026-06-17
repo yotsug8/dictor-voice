@@ -2,22 +2,22 @@
 
 # Голос Диктора
 
-<img width="380" alt="Окно приложения «Голос Диктора»" src="https://github.com/user-attachments/assets/a3aaee4a-5631-4094-8b66-ef162232b425" />
-
-Замена голоса на синтезированный голос диктора в реальном времени (русский). Для Windows.
-Говоришь — после паузы программа распознаёт речь и озвучивает её голосом диктора,
-выводя звук в виртуальный микрофон, чтобы тебя слышали в голосовом чате.
+<img width="558" alt="Окно приложения «Голос Диктора»" src="https://github.com/user-attachments/assets/a3aaee4a-5631-4094-8b66-ef162232b425" />
 
 ![Платформа: Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white)
 ![Лицензия: MIT](https://img.shields.io/github/license/yotsug8/dictor-voice?color=blue)
 ![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
 
-### Скачать
+</div>
+
+Замена голоса на синтезированный голос диктора в реальном времени (русский). Для Windows.
+Говоришь — после паузы программа распознаёт речь и озвучивает её голосом диктора,
+выводя звук в виртуальный микрофон, чтобы тебя слышали в голосовом чате.
+
+## Скачать
 
 [![Скачать — версия для NVIDIA](https://img.shields.io/badge/⬇%20Скачать-NVIDIA-3ecf8e?style=for-the-badge)](https://drive.google.com/file/d/1Wlzu2UZX5vxc6VEXWZfGJnkM8mUTNaYE/view?usp=sharing)
 [![Скачать — версия для CPU](https://img.shields.io/badge/⬇%20Скачать-CPU-7c8cff?style=for-the-badge)](https://github.com/yotsug8/dictor-voice/releases)
-
-</div>
 
 - **NVIDIA-версия** — `Diktor-NVIDIA_v1.2.zip`, быстрее, качается с Google Drive (для ПК с видеокартой NVIDIA).
 - **CPU-версия** — `Diktor-CPU_v1.2.zip` в разделе [Releases](https://github.com/yotsug8/dictor-voice/releases), работает у всех, медленнее.
