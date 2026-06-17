@@ -14,7 +14,7 @@ set PYCMD=py -3.10
 set RVC_FLAGS=
 py -3.10 -c "import rvc_python" 2>nul
 if not errorlevel 1 (
-    echo Naiden rvc-python - sobirau s podderzhkoy golosov personazhey (RVC).
+    echo Naiden rvc-python - sobirau s podderzhkoy golosov personazhey ^(RVC^).
     set RVC_FLAGS=--collect-all rvc_python --collect-all fairseq --collect-all hydra --collect-all omegaconf --collect-all antlr4 --collect-all faiss --collect-all librosa --collect-all numba --collect-all llvmlite --collect-all torchcrepe --collect-all pyworld
 ) else (
     echo rvc-python ne naiden - sobirau obychnuyu versiyu, bez golosov personazhey.
