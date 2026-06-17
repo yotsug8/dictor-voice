@@ -1,5 +1,4 @@
-<img width="560" height="855" alt="Окно приложения «Голос Диктора»" src="https://github.com/user-attachments/assets/c2fc0be8-75e0-4034-bc87-e62b5e13795d" />
-
+<img width="559" height="964" alt="Окно приложения «Голос Диктора»" src="https://github.com/user-attachments/assets/bf9d0d15-058b-4897-81fe-e6910983563b" />
 
 # Голос Диктора
 
