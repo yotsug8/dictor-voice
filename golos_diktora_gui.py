@@ -582,21 +582,28 @@ class DiktorApp:
 
     # ---------- audio / translate ----------
     def _translate(self, text, target):
-        import concurrent.futures
+        # Перевод гоняем в daemon-потоке: deep_translator/requests могут зависнуть
+        # на плохой сети без таймаута, а daemon-поток не помешает закрыть программу.
+        result = {}
+        done = threading.Event()
+
         def do():
-            from deep_translator import GoogleTranslator
-            return GoogleTranslator(source="ru", target=target).translate(text)
-        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        try:
-            return ex.submit(do).result(timeout=10)
-        except concurrent.futures.TimeoutError:
+            try:
+                from deep_translator import GoogleTranslator
+                result["text"] = GoogleTranslator(source="ru", target=target).translate(text)
+            except Exception as e:
+                result["error"] = e
+            finally:
+                done.set()
+
+        threading.Thread(target=do, daemon=True).start()
+        if not done.wait(timeout=10):
             self._log("Перевод: нет ответа от сервера (таймаут 10 с)")
             return None
-        except Exception as e:
-            self._log(f"Перевод недоступен: {e}")
+        if "error" in result:
+            self._log(f"Перевод недоступен: {result['error']}")
             return None
-        finally:
-            ex.shutdown(wait=False)
+        return result.get("text")
 
     def _synth(self, text, voice, rate):
         async def go():
@@ -732,6 +739,17 @@ class DiktorApp:
                 pass
             self.recorder = None
 
+    def _abort_run(self, recorder_dead=False):
+        """Аварийно завершает рабочий поток при ошибке: сбрасывает интерфейс
+        в исходное состояние, но оставляет статус «Ошибка» (в отличие от
+        обычной остановки). Вызывается из рабочего потока."""
+        self.running = False
+        if recorder_dead:
+            # рекордер уже выключен в ветке ошибки — не выключать его повторно
+            self.recorder = None
+        self.root.after(0, self.stop)
+        self.root.after(0, lambda: self._status(RED, "Ошибка"))
+
     # ---------- worker ----------
     def _run(self):
         try:
@@ -739,8 +757,7 @@ class DiktorApp:
             from RealtimeSTT import AudioToTextRecorder
         except Exception as e:
             self._log(f"Не установлены библиотеки: {e}")
-            self._status(RED, "Ошибка")
-            self.root.after(0, self.stop)
+            self._abort_run()
             return
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -765,8 +782,7 @@ class DiktorApp:
             self.recorder = make_recorder()
         except Exception as e:
             self._log(f"Ошибка запуска: {e}")
-            self._status(RED, "Ошибка")
-            self.root.after(0, self.stop)
+            self._abort_run()
             return
 
         self._log("Готово к работе.")
@@ -820,8 +836,7 @@ class DiktorApp:
                         self._status(ACCENT, "Прослушивание")
                     except Exception as e2:
                         self._log(f"Не удалось сменить модель: {e2}")
-                        self._status(RED, "Ошибка")
-                        self.root.after(0, self.stop)
+                        self._abort_run(recorder_dead=True)
                         break
                     continue
                 self._log(f"Пропущено: {e}")
@@ -840,8 +855,7 @@ class DiktorApp:
                         self._status(ACCENT, "Прослушивание")
                     except Exception as e2:
                         self._log(f"Не удалось перезапустить: {e2}")
-                        self._status(RED, "Ошибка")
-                        self.root.after(0, self.stop)
+                        self._abort_run(recorder_dead=True)
                         break
                 continue
 
