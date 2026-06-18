@@ -151,7 +151,8 @@ class DiktorApp:
     def _load_settings(self):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
         except Exception:
             return {}
 
@@ -331,8 +332,8 @@ class DiktorApp:
         for pref in ("Windows DirectSound", "Windows WASAPI", "MME"):
             if pref in apis:
                 target = apis.index(pref); break
-        self.device_map = {}
         labels = []
+        device_map = {}
         try:
             devices = sd.query_devices()
         except Exception as e:
@@ -348,10 +349,11 @@ class DiktorApp:
                 continue
             label = self._friendly(dev["name"])
             base, n = label, 2
-            while label in self.device_map:
+            while label in device_map:
                 label = f"{base} ({n})"; n += 1
-            self.device_map[label] = idx
+            device_map[label] = idx
             labels.append(label)
+        self.device_map = device_map
         return labels or ["(нет устройств)"]
 
     def _cable_present(self, devices):
@@ -367,7 +369,13 @@ class DiktorApp:
     def _device_idx(self):
         if not self.device_map:
             return None
-        return self.device_map.get(self.device_var.get(), 0)
+        sel = self.device_var.get()
+        if sel in self.device_map:
+            return self.device_map[sel]
+        # выбранная метка устарела (устройство пропало из списка) — берём
+        # первое доступное вместо произвольного индекса 0, который может
+        # не входить в device_map вовсе
+        return next(iter(self.device_map.values()))
 
     def refresh_devices(self):
         devices = self._devices()
@@ -438,6 +446,11 @@ class DiktorApp:
                 self.tray.stop()
             except Exception:
                 pass
+        try:
+            import keyboard
+            keyboard.unhook_all()
+        except Exception:
+            pass
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._stop_mic_monitor()
         self.root.destroy()
@@ -661,6 +674,31 @@ class DiktorApp:
             except Exception as e:
                 self._log(f"Ошибка воспроизведения: {e}")
 
+    def _resolve_translation(self, text, lang_disp, edge_voice):
+        """Если для lang_disp задан перевод — переводит text и возвращает
+        (перевод, голос перевода); иначе (text, edge_voice) без изменений.
+        None, если перевод запрошен, но недоступен (сбой сети/таймаут)."""
+        tcode, tvoice = LANGUAGES.get(lang_disp, (None, None))
+        if not tcode:
+            return text, edge_voice
+        out = self._translate(text, tcode)
+        if not out:
+            return None
+        self._log(f"→ {out}")
+        return out, tvoice
+
+    def _synth_convert_play(self, text, voice, rate, rvc_path):
+        """Синтез -> (опционально) RVC-конверсия -> проигрывание. Общий конвейер
+        для теста, озвучки набранного текста и основного цикла распознавания."""
+        s, sr = self._synth(text, voice, rate)
+        if s is not None and rvc_path:
+            s, sr = self._convert_rvc(s, sr, rvc_path)
+        if s is not None:
+            # индекс устройства берём прямо перед игрой звука, а не заранее:
+            # синтез/RVC может занять много секунд, а пользователь — успеть
+            # обновить список устройств (↻) за это время
+            self._play(s, sr, self._device_idx())
+
     # ---------- control ----------
     def toggle(self):
         self.stop() if self.running else self.start()
@@ -716,14 +754,7 @@ class DiktorApp:
 
         def run():
             try:
-                s, sr = self._synth(TEST_PHRASE, edge_voice, rate)
-                if s is not None and rvc_path:
-                    s, sr = self._convert_rvc(s, sr, rvc_path)
-                if s is not None:
-                    # индекс устройства берём прямо перед игрой звука, а не заранее:
-                    # синтез/RVC может занять много секунд, а пользователь — успеть
-                    # обновить список устройств (↻) за это время
-                    self._play(s, sr, self._device_idx())
+                self._synth_convert_play(TEST_PHRASE, edge_voice, rate, rvc_path)
                 self._log("Тест завершён.")
             except Exception as e:
                 self._log(f"Ошибка теста: {e}")
@@ -744,20 +775,11 @@ class DiktorApp:
 
         def run():
             try:
-                tcode, tvoice = LANGUAGES.get(lang_disp, (None, None))
-                if tcode:
-                    out = self._translate(text, tcode)
-                    if not out:
-                        return
-                    self._log(f"→ {out}")
-                    out_voice = tvoice
-                else:
-                    out, out_voice = text, edge_voice
-                s, sr = self._synth(out, out_voice, rate)
-                if s is not None and rvc_path:
-                    s, sr = self._convert_rvc(s, sr, rvc_path)
-                if s is not None:
-                    self._play(s, sr, self._device_idx())
+                resolved = self._resolve_translation(text, lang_disp, edge_voice)
+                if resolved is None:
+                    return
+                out, out_voice = resolved
+                self._synth_convert_play(out, out_voice, rate, rvc_path)
             except Exception as e:
                 self._log(f"Ошибка озвучки текста: {e}")
         threading.Thread(target=run, daemon=True).start()
@@ -819,8 +841,10 @@ class DiktorApp:
         обычной остановки). Вызывается из рабочего потока."""
         self.running = False
         if recorder_dead:
-            # рекордер уже выключен в ветке ошибки — не выключать его повторно
-            self.recorder = None
+            # рекордер уже выключен в ветке ошибки — не выключать его повторно;
+            # сбрасываем под тем же замком, что и _install_recorder/_discard_recorder
+            with self._recorder_lock:
+                self.recorder = None
         self.root.after(0, self.stop)
         self.root.after(0, lambda: self._status(RED, "Ошибка"))
 
@@ -866,7 +890,7 @@ class DiktorApp:
             return
 
         self._log("Готово к работе.")
-        self._status(ACCENT, "Прослушивание")
+        self._status(ACCENT, "Прослушивание") if not self.muted else self._status(YELLOW, "Пауза")
         last_text = ""
         errors = 0
         while self.running:
@@ -885,24 +909,15 @@ class DiktorApp:
                 if self.muted:
                     continue
 
-                tcode, tvoice = LANGUAGES.get(self.lang_var.get(), (None, None))
                 rate = SPEEDS[self.speed_var.get()]
                 edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
-                if tcode:
-                    out = self._translate(text, tcode)
-                    if not out:
-                        continue
-                    self._log(f"→ {out}")
-                    out_voice = tvoice
-                else:
-                    out, out_voice = text, edge_voice
+                resolved = self._resolve_translation(text, self.lang_var.get(), edge_voice)
+                if resolved is None:
+                    continue
+                out, out_voice = resolved
 
                 self._status(GREEN, "Озвучивание")
-                s, sr = self._synth(out, out_voice, rate)
-                if s is not None and rvc_path:
-                    s, sr = self._convert_rvc(s, sr, rvc_path)
-                if s is not None:
-                    self._play(s, sr, self._device_idx())
+                self._synth_convert_play(out, out_voice, rate, rvc_path)
                 if self.running and not self.muted:
                     self._status(ACCENT, "Прослушивание")
             except Exception as e:
@@ -915,7 +930,8 @@ class DiktorApp:
                         errors = 0
                         last_text = ""
                         self._log("Модель распознавания обновлена.")
-                        self._status(ACCENT, "Прослушивание")
+                        if not self.muted:
+                            self._status(ACCENT, "Прослушивание")
                     except Exception as e2:
                         self._log(f"Не удалось сменить модель: {e2}")
                         self._abort_run(recorder_dead=True)
@@ -926,8 +942,11 @@ class DiktorApp:
                 if errors >= 5 and self.running:
                     self._log("Слишком много ошибок подряд — перезапуск распознавания...")
                     self._status(YELLOW, "Перезапуск")
+                    with self._recorder_lock:
+                        old_recorder = self.recorder
                     try:
-                        self.recorder.shutdown()
+                        if old_recorder is not None:
+                            old_recorder.shutdown()
                     except Exception:
                         pass
                     try:
@@ -936,7 +955,8 @@ class DiktorApp:
                             break
                         errors = 0
                         self._log("Распознавание перезапущено.")
-                        self._status(ACCENT, "Прослушивание")
+                        if not self.muted:
+                            self._status(ACCENT, "Прослушивание")
                     except Exception as e2:
                         self._log(f"Не удалось перезапустить: {e2}")
                         self._abort_run(recorder_dead=True)
