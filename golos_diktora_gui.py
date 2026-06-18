@@ -118,8 +118,8 @@ class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("580x1010")
-        self.root.minsize(540, 960)
+        self.root.geometry("680x880")
+        self.root.minsize(620, 800)
         self.root.configure(fg_color=BG)
 
         self.running = False
@@ -127,6 +127,10 @@ class DiktorApp:
         self.recorder = None
         self._recorder_lock = threading.Lock()
         self._recorder_restart_pending = False
+        # фоновый поток, в котором сейчас (или только что) отрабатывает
+        # rec.shutdown() старого рекордера — рабочий поток дожидается его перед
+        # тем как строить новый (см. _join_recorder_shutdown)
+        self._recorder_shutdown_thread = None
         self.device_map = {}
         self.input_device_map = {}
         # сериализует целиком синтез->RVC->проигрывание: «Тест», озвучку набранного
@@ -198,7 +202,7 @@ class DiktorApp:
 
     def _build(self):
         head = ctk.CTkFrame(self.root, fg_color="transparent")
-        head.pack(fill="x", padx=26, pady=(22, 4))
+        head.pack(fill="x", padx=26, pady=(16, 4))
         ctk.CTkLabel(head, text="🎙", text_color=ACCENT, fg_color=ACCENT_SOFT,
                      corner_radius=20, width=40, height=40, font=(FONT, 17)).pack(side="left")
         ctk.CTkLabel(head, text="Голос Диктора", text_color=TEXT,
@@ -225,7 +229,7 @@ class DiktorApp:
                               segmented_button_selected_hover_color=ACC_HOV,
                               segmented_button_unselected_hover_color="#3a3a54",
                               text_color=TEXT)
-        tabs.pack(fill="x", padx=26, pady=14)
+        tabs.pack(fill="x", padx=26, pady=10)
         tabs.grid_propagate(False)
         try:
             tabs._segmented_button.configure(font=(FONT, 13, "bold"))
@@ -361,7 +365,7 @@ class DiktorApp:
                       corner_radius=10, font=(FONT, 15, "bold")).grid(row=0, column=1, padx=(8, 0))
 
         btns = ctk.CTkFrame(self.root, fg_color="transparent")
-        btns.pack(pady=6)
+        btns.pack(pady=4)
         self.btn = ctk.CTkButton(btns, text="▶  Старт", command=self.toggle, width=200, height=46,
                                  fg_color=GREEN, hover_color=GREEN_H, text_color="#0c1410",
                                  corner_radius=18, font=(FONT, 15, "bold"))
@@ -384,7 +388,7 @@ class DiktorApp:
         self._apply_topmost()
 
         inrow = ctk.CTkFrame(self.root, fg_color="transparent")
-        inrow.pack(fill="x", padx=26, pady=(8, 2))
+        inrow.pack(fill="x", padx=26, pady=(6, 2))
         inrow.columnconfigure(0, weight=1)
         self.text_entry = ctk.CTkEntry(inrow, placeholder_text="Введите текст и нажмите Enter — диктор озвучит…",
                                        fg_color=FIELD, text_color=TEXT, border_width=0,
@@ -397,7 +401,7 @@ class DiktorApp:
         self.say_btn.grid(row=0, column=1, padx=(8, 0))
 
         labrow = ctk.CTkFrame(self.root, fg_color="transparent")
-        labrow.pack(fill="x", padx=30, pady=(8, 4))
+        labrow.pack(fill="x", padx=30, pady=(6, 3))
         ctk.CTkLabel(labrow, text="📝  РАСПОЗНАННАЯ РЕЧЬ", text_color=GREY,
                      font=(FONT, 10, "bold")).pack(side="left")
         ctk.CTkButton(labrow, text="Очистить", width=72, height=24, command=self._clear_log,
@@ -405,7 +409,7 @@ class DiktorApp:
                       corner_radius=8, font=(FONT, 10)).pack(side="right")
         self.log = ctk.CTkTextbox(self.root, fg_color=CARD, text_color=TEXT,
                                   font=("Consolas", 12), corner_radius=14, wrap="word")
-        self.log.pack(fill="both", expand=True, padx=26, pady=(0, 22))
+        self.log.pack(fill="both", expand=True, padx=26, pady=(0, 14))
 
         if not self._cable_found:
             self._log("VB-Cable не найден. Без него собеседники вас не услышат. "
@@ -952,7 +956,15 @@ class DiktorApp:
         # отдаёт результат .text() рабочему потоку), всё окно зависает. Гоним
         # его в отдельном потоке, чтобы интерфейс не подвисал ни при каких
         # раскладах.
-        threading.Thread(target=shutdown, daemon=True).start()
+        t = threading.Thread(target=shutdown, daemon=True)
+        # рабочий поток дождётся именно этого потока перед make_recorder() —
+        # см. _join_recorder_shutdown(). Без этого быстрая смена модели/микрофона
+        # (или серия кликов по вкладкам) могла запустить сборку нового
+        # рекордера, пока старый ещё не отпустил аудиоустройство и внутренние
+        # потоки — два AudioToTextRecorder одновременно дерутся за один и тот
+        # же микрофон/CPU, что и давало зависание и ошибку загрузки модели.
+        self._recorder_shutdown_thread = t
+        t.start()
 
     def _on_model_change(self, *args):
         self._save_settings()
@@ -1054,7 +1066,26 @@ class DiktorApp:
                 rec.shutdown()
             except Exception:
                 pass
-        threading.Thread(target=shutdown, daemon=True).start()
+        t = threading.Thread(target=shutdown, daemon=True)
+        # см. комментарий в _request_recorder_restart: следующий make_recorder()
+        # (если пользователь сразу нажмёт «Старт» заново) дождётся этого потока
+        self._recorder_shutdown_thread = t
+        t.start()
+
+    def _join_recorder_shutdown(self):
+        """Дожидается завершения отложенного rec.shutdown(), запущенного в фоне
+        _discard_recorder()/_request_recorder_restart(), прежде чем строить
+        новый рекордер. AudioToTextRecorder.shutdown() не гарантирует, что
+        устройство ввода и внутренние потоки уже освобождены к моменту, когда
+        .text() вышел из блокировки — без этого ожидания make_recorder() мог
+        начать открывать тот же микрофон и грузить модель, пока старый рекордер
+        ещё не отпустил ресурсы, и оба боролись за один и тот же микрофон/CPU
+        (это и давало зависание при частых кликах по вкладкам и сбой загрузки
+        модели). Вызывается только из рабочего потока, поэтому ожидание здесь
+        не блокирует интерфейс."""
+        t, self._recorder_shutdown_thread = self._recorder_shutdown_thread, None
+        if t is not None:
+            t.join()
 
     def _install_recorder(self, new_recorder):
         """Атомарно ставит new_recorder как текущий рекордер, если приложение
@@ -1127,6 +1158,11 @@ class DiktorApp:
                 input_device_index=self._input_device_idx(),
             )
 
+        # если пользователь только что нажал «Стоп» и сразу «Старт», shutdown()
+        # предыдущего рекордера может ещё выполняться в фоне — дожидаемся его,
+        # иначе новый AudioToTextRecorder откроет тот же микрофон, пока старый
+        # ещё не отпустил его
+        self._join_recorder_shutdown()
         try:
             new_recorder = make_recorder()
         except Exception as e:
@@ -1151,6 +1187,10 @@ class DiktorApp:
             пересборки или ошибка самой пересборки) — иначе True."""
             nonlocal errors, last_text
             try:
+                # см. комментарий в _join_recorder_shutdown(): дожидаемся, пока
+                # старый рекордер (выключенный в фоне при смене модели/микрофона)
+                # действительно отпустит микрофон, прежде чем открывать новый
+                self._join_recorder_shutdown()
                 new_recorder = make_recorder()
                 if not self._install_recorder(new_recorder):
                     return False
