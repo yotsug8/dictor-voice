@@ -123,6 +123,7 @@ class DiktorApp:
         self.running = False
         self.muted = False
         self.recorder = None
+        self._recorder_lock = threading.Lock()
         self._model_switch_pending = False
         self.device_map = {}
         self._play_lock = threading.Lock()
@@ -431,11 +432,7 @@ class DiktorApp:
         except Exception:
             pass
         self.running = False
-        if self.recorder is not None:
-            try:
-                self.recorder.shutdown()
-            except Exception:
-                pass
+        self._discard_recorder()
         if self.tray is not None:
             try:
                 self.tray.stop()
@@ -670,13 +667,21 @@ class DiktorApp:
 
     def _on_model_change(self, *args):
         self._save_settings()
-        if not self.running or self.recorder is None:
+        if not self.running:
+            return
+        # self.recorder читаем под тем же замком, что и _install_recorder/
+        # _discard_recorder — иначе между проверкой "не None" и вызовом
+        # .shutdown() рабочий поток мог успеть сбросить self.recorder в None
+        # (например, по нажатию «Стоп»), и вызов ушёл бы в None.shutdown().
+        with self._recorder_lock:
+            rec = self.recorder
+        if rec is None:
             return
         self._model_switch_pending = True
         self._log(f"Меняю модель распознавания на «{self.model_var.get()}»...")
         self._status(YELLOW, "Перезапуск")
         try:
-            self.recorder.shutdown()
+            rec.shutdown()
         except Exception:
             pass
 
@@ -766,12 +771,39 @@ class DiktorApp:
         threading.Thread(target=self._run, daemon=True).start()
 
     def _discard_recorder(self):
-        if self.recorder is not None:
+        # _recorder_lock делает чтение-и-сброс self.recorder атомарным относительно
+        # рабочего потока (_run), который под тем же замком решает, можно ли
+        # установить новый рекордер после перезапуска модели/распознавания —
+        # без этого окно между "self.running ещё True" и "self.recorder = new"
+        # позволяет новому рекордеру пережить stop()/_quit() и зависнуть без владельца.
+        with self._recorder_lock:
+            rec, self.recorder = self.recorder, None
+        if rec is not None:
             try:
-                self.recorder.shutdown()
+                rec.shutdown()
             except Exception:
                 pass
-            self.recorder = None
+
+    def _install_recorder(self, new_recorder):
+        """Атомарно ставит new_recorder как текущий рекордер, если приложение
+        всё ещё запущено; иначе выключает его. Без общего замка с
+        _discard_recorder() здесь была гонка: между проверкой self.running
+        и записью self.recorder мог отработать stop()/_quit() из главного
+        потока, после чего новый рекордер всё равно подменял бы self.recorder
+        и оставался бы без владельца до конца процесса."""
+        with self._recorder_lock:
+            if not self.running:
+                stale = new_recorder
+            else:
+                self.recorder = new_recorder
+                stale = None
+        if stale is None:
+            return True
+        try:
+            stale.shutdown()
+        except Exception:
+            pass
+        return False
 
     def stop(self):
         self.running = False
@@ -821,10 +853,16 @@ class DiktorApp:
             )
 
         try:
-            self.recorder = make_recorder()
+            new_recorder = make_recorder()
         except Exception as e:
             self._log(f"Ошибка запуска: {e}")
             self._abort_run()
+            return
+        if not self._install_recorder(new_recorder):
+            # пользователь успел нажать «Стоп», пока грузилась модель (загрузка
+            # может занять десятки секунд, особенно при первой загрузке из
+            # интернета) — stop() уже сбросил интерфейс, новый рекордер выключен
+            # внутри _install_recorder, тут просто выходим без рабочего цикла
             return
 
         self._log("Готово к работе.")
@@ -872,15 +910,8 @@ class DiktorApp:
                     self._model_switch_pending = False
                     try:
                         new_recorder = make_recorder()
-                        if not self.running:
-                            # пользователь успел нажать «Стоп», пока грузилась модель —
-                            # не подменяем self.recorder, иначе его никто не выключит
-                            try:
-                                new_recorder.shutdown()
-                            except Exception:
-                                pass
+                        if not self._install_recorder(new_recorder):
                             break
-                        self.recorder = new_recorder
                         errors = 0
                         last_text = ""
                         self._log("Модель распознавания обновлена.")
@@ -901,13 +932,8 @@ class DiktorApp:
                         pass
                     try:
                         new_recorder = make_recorder()
-                        if not self.running:
-                            try:
-                                new_recorder.shutdown()
-                            except Exception:
-                                pass
+                        if not self._install_recorder(new_recorder):
                             break
-                        self.recorder = new_recorder
                         errors = 0
                         self._log("Распознавание перезапущено.")
                         self._status(ACCENT, "Прослушивание")
