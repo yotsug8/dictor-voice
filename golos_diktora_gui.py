@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import asyncio
+import datetime
 import threading
 import queue
 
@@ -210,7 +211,11 @@ class DiktorApp:
         self.speed_var.trace_add("write", self._on_setting_change)
         self.lang_var = ctk.StringVar(value=g("lang", list(LANGUAGES)[0], LANGUAGES))
         self.lang_var.trace_add("write", self._on_setting_change)
-        self.vol_var = ctk.IntVar(value=int(self.cfg.get("volume", 100)))
+        try:
+            vol0 = max(0, min(100, int(self.cfg.get("volume", 100))))
+        except (TypeError, ValueError):
+            vol0 = 100
+        self.vol_var = ctk.IntVar(value=vol0)
 
         devices = self._devices()
         self._cable_found = self._cable_present(devices)
@@ -359,6 +364,8 @@ class DiktorApp:
         return devices[0]
 
     def _device_idx(self):
+        if not self.device_map:
+            return None
         return self.device_map.get(self.device_var.get(), 0)
 
     def refresh_devices(self):
@@ -476,7 +483,6 @@ class DiktorApp:
 
     # ---------- ui queue ----------
     def _log(self, msg):
-        import datetime
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         self.ui_queue.put(("log", f"[{ts}] {msg}"))
 
@@ -531,9 +537,9 @@ class DiktorApp:
                 self._log(f"RVC: для «{stem}» не нашёл подходящий .index по имени файла, "
                           f"беру первый попавшийся ({os.path.basename(cands[0])}) — "
                           f"переименуйте файлы, если он не тот.")
-            return cands[0] if cands else ""
+            return cands[0] if cands else None
         except Exception:
-            return ""
+            return None
 
     def _ensure_rvc(self, model_path):
         """Лениво создаёт движок и (пере)загружает модель. Кэширует между фразами."""
@@ -639,9 +645,16 @@ class DiktorApp:
         if not mp3:
             self._log("Озвучка недоступна: сервер не вернул звук.")
             return None, None
-        return sf.read(io.BytesIO(mp3), dtype="float32")
+        try:
+            return sf.read(io.BytesIO(mp3), dtype="float32")
+        except Exception as e:
+            self._log(f"Озвучка недоступна: не удалось декодировать звук ({e}).")
+            return None, None
 
     def _play(self, samples, sr, device_idx):
+        if device_idx is None:
+            self._log("Нет доступных устройств вывода — воспроизведение пропущено.")
+            return
         v = max(0, min(100, int(self.vol_var.get()))) / 100.0
         with self._play_lock:
             try:
