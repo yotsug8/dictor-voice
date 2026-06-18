@@ -620,9 +620,11 @@ class DiktorApp:
             return data
         try:
             mp3 = asyncio.run_coroutine_threadsafe(go(), self._loop).result(timeout=15)
-        except Exception:
+        except Exception as e:
+            self._log(f"Озвучка недоступна: {e}")
             return None, None
         if not mp3:
+            self._log("Озвучка недоступна: сервер не вернул звук.")
             return None, None
         return sf.read(io.BytesIO(mp3), dtype="float32")
 
