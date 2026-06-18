@@ -116,16 +116,17 @@ class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("560x935")
-        self.root.minsize(520, 885)
+        self.root.geometry("560x1040")
+        self.root.minsize(520, 990)
         self.root.configure(fg_color=BG)
 
         self.running = False
         self.muted = False
         self.recorder = None
         self._recorder_lock = threading.Lock()
-        self._model_switch_pending = False
+        self._recorder_restart_pending = False
         self.device_map = {}
+        self.input_device_map = {}
         self._play_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
         threading.Thread(target=self._loop.run_forever, daemon=True).start()
@@ -163,9 +164,11 @@ class DiktorApp:
                     "voice": self.voice_var.get(),
                     "model": self.model_var.get(),
                     "device": self.device_var.get(),
+                    "input_device": self.input_device_var.get(),
                     "speed": self.speed_var.get(),
                     "lang": self.lang_var.get(),
                     "volume": int(self.vol_var.get()),
+                    "pitch": int(self.pitch_var.get()),
                     "topmost": bool(self.topmost_var.get()),
                 }, f, ensure_ascii=False)
         except Exception:
@@ -218,12 +221,23 @@ class DiktorApp:
         except (TypeError, ValueError):
             vol0 = 100
         self.vol_var = ctk.IntVar(value=vol0)
+        try:
+            pitch0 = max(-12, min(12, int(self.cfg.get("pitch", 0))))
+        except (TypeError, ValueError):
+            pitch0 = 0
+        self.pitch_var = ctk.IntVar(value=pitch0)
 
         devices = self._devices()
         self._cable_found = self._cable_present(devices)
         dev0 = self.cfg.get("device") if self.cfg.get("device") in devices else self._default_device(devices)
         self.device_var = ctk.StringVar(value=dev0)
         self.device_var.trace_add("write", self._on_setting_change)
+
+        in_devices = self._input_devices()
+        indev0 = (self.cfg.get("input_device") if self.cfg.get("input_device") in in_devices
+                  else self._default_input_device(in_devices))
+        self.input_device_var = ctk.StringVar(value=indev0)
+        self.input_device_var.trace_add("write", self._on_input_device_change)
 
         self._cap(card, "Голос диктора").grid(row=0, column=0, sticky="ew", padx=(18, 9), pady=(16, 2))
         self._menu(card, self.voice_var, voice_names).grid(row=1, column=0, sticky="ew", padx=(18, 9))
@@ -244,18 +258,38 @@ class DiktorApp:
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
                       fg_color=FIELD, command=self._on_vol).grid(row=5, column=0, columnspan=2, sticky="ew", padx=18)
 
+        pitchcap = ctk.CTkFrame(card, fg_color="transparent")
+        pitchcap.grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        ctk.CTkLabel(pitchcap, text="Тон голоса персонажа (только RVC)", text_color=SUB,
+                     font=(FONT, 12)).pack(side="left")
+        self.pitch_lbl = ctk.CTkLabel(pitchcap, text=self._pitch_text(pitch0), text_color=ACCENT, font=(FONT, 12))
+        self.pitch_lbl.pack(side="right")
+        ctk.CTkSlider(card, from_=-12, to=12, variable=self.pitch_var, number_of_steps=24,
+                      progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
+                      fg_color=FIELD, command=self._on_pitch).grid(row=7, column=0, columnspan=2, sticky="ew", padx=18)
+
+        self._cap(card, "Микрофон (вход)").grid(row=8, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        inrow_dev = ctk.CTkFrame(card, fg_color="transparent")
+        inrow_dev.grid(row=9, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2))
+        inrow_dev.columnconfigure(0, weight=1)
+        self.input_device_menu = self._menu(inrow_dev, self.input_device_var, in_devices)
+        self.input_device_menu.grid(row=0, column=0, sticky="ew")
+        ctk.CTkButton(inrow_dev, text="↻", width=40, command=self.refresh_input_devices,
+                      fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
+                      corner_radius=10, font=(FONT, 15, "bold")).grid(row=0, column=1, padx=(8, 0))
+
         microw = ctk.CTkFrame(card, fg_color="transparent")
-        microw.grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        microw.grid(row=10, column=0, columnspan=2, sticky="ew", padx=18, pady=(10, 2))
         microw.columnconfigure(1, weight=1)
-        ctk.CTkLabel(microw, text="Микрофон", text_color=SUB, font=(FONT, 12)).grid(row=0, column=0, padx=(0, 10))
+        ctk.CTkLabel(microw, text="Уровень", text_color=SUB, font=(FONT, 12)).grid(row=0, column=0, padx=(0, 10))
         self.mic_bar = ctk.CTkProgressBar(microw, progress_color=GREEN, fg_color=FIELD,
                                           height=12, corner_radius=6)
         self.mic_bar.grid(row=0, column=1, sticky="ew")
         self.mic_bar.set(0)
 
-        self._cap(card, "Куда выводить звук").grid(row=7, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        self._cap(card, "Куда выводить звук").grid(row=11, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
         devrow = ctk.CTkFrame(card, fg_color="transparent")
-        devrow.grid(row=8, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 18))
+        devrow.grid(row=12, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 18))
         devrow.columnconfigure(0, weight=1)
         self.device_menu = self._menu(devrow, self.device_var, devices)
         self.device_menu.grid(row=0, column=0, sticky="ew")
@@ -323,7 +357,10 @@ class DiktorApp:
             name = name.split("(")[0].strip()
         return name
 
-    def _devices(self):
+    def _query_devices(self, channel_key):
+        """Общий опрос sd.query_devices() для устройств вывода/ввода.
+        channel_key — 'max_output_channels' или 'max_input_channels'.
+        Возвращает (labels, device_map); при сбое — (None, исключение)."""
         try:
             apis = [ha["name"] for ha in sd.query_hostapis()]
         except Exception:
@@ -332,15 +369,14 @@ class DiktorApp:
         for pref in ("Windows DirectSound", "Windows WASAPI", "MME"):
             if pref in apis:
                 target = apis.index(pref); break
-        labels = []
-        device_map = {}
         try:
             devices = sd.query_devices()
         except Exception as e:
-            self._log(f"Не удалось получить список устройств вывода: {e}")
-            return ["(нет устройств)"]
+            return None, e
+        labels = []
+        device_map = {}
         for idx, dev in enumerate(devices):
-            if dev["max_output_channels"] <= 0:
+            if dev[channel_key] <= 0:
                 continue
             if target is not None and dev["hostapi"] != target:
                 continue
@@ -353,7 +389,22 @@ class DiktorApp:
                 label = f"{base} ({n})"; n += 1
             device_map[label] = idx
             labels.append(label)
-        self.device_map = device_map
+        return labels, device_map
+
+    def _devices(self):
+        labels, result = self._query_devices("max_output_channels")
+        if labels is None:
+            self._log(f"Не удалось получить список устройств вывода: {result}")
+            return ["(нет устройств)"]
+        self.device_map = result
+        return labels or ["(нет устройств)"]
+
+    def _input_devices(self):
+        labels, result = self._query_devices("max_input_channels")
+        if labels is None:
+            self._log(f"Не удалось получить список микрофонов: {result}")
+            return ["(нет устройств)"]
+        self.input_device_map = result
         return labels or ["(нет устройств)"]
 
     def _cable_present(self, devices):
@@ -366,16 +417,32 @@ class DiktorApp:
                 return d
         return devices[0]
 
-    def _device_idx(self):
-        if not self.device_map:
+    def _default_input_device(self, devices):
+        """Системный микрофон по умолчанию, если он есть в списке; иначе первый."""
+        try:
+            default_idx = sd.default.device[0]
+            for label, idx in self.input_device_map.items():
+                if idx == default_idx:
+                    return label
+        except Exception:
+            pass
+        return devices[0]
+
+    def _map_idx(self, device_map, selected_label):
+        if not device_map:
             return None
-        sel = self.device_var.get()
-        if sel in self.device_map:
-            return self.device_map[sel]
+        if selected_label in device_map:
+            return device_map[selected_label]
         # выбранная метка устарела (устройство пропало из списка) — берём
         # первое доступное вместо произвольного индекса 0, который может
         # не входить в device_map вовсе
-        return next(iter(self.device_map.values()))
+        return next(iter(device_map.values()))
+
+    def _device_idx(self):
+        return self._map_idx(self.device_map, self.device_var.get())
+
+    def _input_device_idx(self):
+        return self._map_idx(self.input_device_map, self.input_device_var.get())
 
     def refresh_devices(self):
         devices = self._devices()
@@ -389,11 +456,26 @@ class DiktorApp:
             self._log("Список устройств обновлён. VB-Cable пока не найден — "
                       "установите его и перезагрузите ПК: https://vb-audio.com/Cable/")
 
+    def refresh_input_devices(self):
+        devices = self._input_devices()
+        self.input_device_menu.configure(values=devices)
+        if self.input_device_var.get() not in devices:
+            self.input_device_var.set(self._default_input_device(devices))
+        self._log("Список микрофонов обновлён.")
+
     def _on_setting_change(self, *args):
         self._save_settings()
 
     def _on_vol(self, val):
         self.vol_lbl.configure(text=f"{int(float(val))}%")
+        self._save_settings()
+
+    def _pitch_text(self, v):
+        v = int(v)
+        return f"{'+' if v > 0 else ''}{v}"
+
+    def _on_pitch(self, val):
+        self.pitch_lbl.configure(text=self._pitch_text(float(val)))
         self._save_settings()
 
     def _apply_topmost(self):
@@ -465,7 +547,7 @@ class DiktorApp:
             except Exception:
                 self.mic_level = 0.0
         try:
-            self._mic_stream = sd.InputStream(channels=1, callback=cb)
+            self._mic_stream = sd.InputStream(channels=1, device=self._input_device_idx(), callback=cb)
             self._mic_stream.start()
         except Exception as e:
             self._mic_stream = None
@@ -595,6 +677,10 @@ class DiktorApp:
             in_path = out_path = None
             try:
                 self._ensure_rvc(model_path)
+                try:
+                    self._rvc.set_params(f0up_key=int(self.pitch_var.get()))
+                except Exception:
+                    pass
                 fd_in, in_path = tempfile.mkstemp(suffix=".wav"); os.close(fd_in)
                 fd_out, out_path = tempfile.mkstemp(suffix=".wav"); os.close(fd_out)
                 sf.write(in_path, samples, sr)
@@ -703,8 +789,10 @@ class DiktorApp:
     def toggle(self):
         self.stop() if self.running else self.start()
 
-    def _on_model_change(self, *args):
-        self._save_settings()
+    def _request_recorder_restart(self, reason_msg):
+        """Просит рабочий поток пересобрать рекордер свежими настройками
+        (модель/устройство ввода), завершив текущий .text(). Используется
+        и при смене модели, и при смене микрофона."""
         if not self.running:
             return
         # self.recorder читаем под тем же замком, что и _install_recorder/
@@ -715,13 +803,24 @@ class DiktorApp:
             rec = self.recorder
         if rec is None:
             return
-        self._model_switch_pending = True
-        self._log(f"Меняю модель распознавания на «{self.model_var.get()}»...")
+        self._recorder_restart_pending = True
+        self._log(reason_msg)
         self._status(YELLOW, "Перезапуск")
         try:
             rec.shutdown()
         except Exception:
             pass
+
+    def _on_model_change(self, *args):
+        self._save_settings()
+        self._request_recorder_restart(f"Меняю модель распознавания на «{self.model_var.get()}»...")
+
+    def _on_input_device_change(self, *args):
+        self._save_settings()
+        if self.running:
+            self._stop_mic_monitor()
+            self._start_mic_monitor()
+        self._request_recorder_restart(f"Меняю микрофон на «{self.input_device_var.get()}»...")
 
     def toggle_mute(self):
         self.muted = not self.muted
@@ -874,6 +973,7 @@ class DiktorApp:
                 post_speech_silence_duration=0.4,
                 beam_size=beam,
                 initial_prompt=WHISPER_PROMPT,
+                input_device_index=self._input_device_idx(),
             )
 
         try:
@@ -921,15 +1021,15 @@ class DiktorApp:
                 if self.running and not self.muted:
                     self._status(ACCENT, "Прослушивание")
             except Exception as e:
-                if self._model_switch_pending and self.running:
-                    self._model_switch_pending = False
+                if self._recorder_restart_pending and self.running:
+                    self._recorder_restart_pending = False
                     try:
                         new_recorder = make_recorder()
                         if not self._install_recorder(new_recorder):
                             break
                         errors = 0
                         last_text = ""
-                        self._log("Модель распознавания обновлена.")
+                        self._log("Распознавание перезапущено с новыми настройками.")
                         if not self.muted:
                             self._status(ACCENT, "Прослушивание")
                     except Exception as e2:
