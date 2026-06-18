@@ -116,8 +116,8 @@ class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("560x1040")
-        self.root.minsize(520, 990)
+        self.root.geometry("560x970")
+        self.root.minsize(520, 920)
         self.root.configure(fg_color=BG)
 
         self.running = False
@@ -141,6 +141,8 @@ class DiktorApp:
         self._rvc_lock = threading.Lock()
         self.rvc_voices = self._scan_rvc_voices()
         self.cfg = self._load_settings()
+        profiles = self.cfg.get("profiles", {})
+        self.profiles = profiles if isinstance(profiles, dict) else {}
 
         self._build()
         self.root.after(80, self._drain)
@@ -170,6 +172,7 @@ class DiktorApp:
                     "volume": int(self.vol_var.get()),
                     "pitch": int(self.pitch_var.get()),
                     "topmost": bool(self.topmost_var.get()),
+                    "profiles": self.profiles,
                 }, f, ensure_ascii=False)
         except Exception:
             pass
@@ -199,10 +202,19 @@ class DiktorApp:
         ctk.CTkLabel(self.root, text="После паузы в речи программа озвучит сказанное голосом диктора",
                      text_color=SUB, font=(FONT, 11), anchor="w").pack(fill="x", padx=28)
 
-        card = ctk.CTkFrame(self.root, fg_color=CARD, corner_radius=16)
-        card.pack(fill="x", padx=26, pady=14)
-        card.columnconfigure(0, weight=1)
-        card.columnconfigure(1, weight=1)
+        tabs = ctk.CTkTabview(self.root, fg_color=CARD, corner_radius=16,
+                              segmented_button_fg_color=FIELD,
+                              segmented_button_selected_color=ACCENT,
+                              segmented_button_selected_hover_color=ACC_HOV,
+                              segmented_button_unselected_hover_color="#34344a",
+                              text_color=TEXT)
+        tabs.pack(fill="x", padx=26, pady=14)
+        tab_voice = tabs.add("Голос")
+        tab_dev = tabs.add("Устройства")
+        tab_voice.columnconfigure(0, weight=1)
+        tab_voice.columnconfigure(1, weight=1)
+        tab_dev.columnconfigure(0, weight=1)
+        tab_dev.columnconfigure(1, weight=1)
 
         def g(k, d, pool):
             v = self.cfg.get(k)
@@ -239,38 +251,61 @@ class DiktorApp:
         self.input_device_var = ctk.StringVar(value=indev0)
         self.input_device_var.trace_add("write", self._on_input_device_change)
 
-        self._cap(card, "Голос диктора").grid(row=0, column=0, sticky="ew", padx=(18, 9), pady=(16, 2))
-        self._menu(card, self.voice_var, voice_names).grid(row=1, column=0, sticky="ew", padx=(18, 9))
-        self._cap(card, "Точность (модель)").grid(row=0, column=1, sticky="ew", padx=(9, 18), pady=(16, 2))
-        self._menu(card, self.model_var, MODELS).grid(row=1, column=1, sticky="ew", padx=(9, 18))
+        self.profile_var = ctk.StringVar(value="Без профиля")
 
-        self._cap(card, "Скорость речи").grid(row=2, column=0, sticky="ew", padx=(18, 9), pady=(14, 2))
-        self._menu(card, self.speed_var, list(SPEEDS)).grid(row=3, column=0, sticky="ew", padx=(18, 9))
-        self._cap(card, "Перевод (диктор на языке)").grid(row=2, column=1, sticky="ew", padx=(9, 18), pady=(14, 2))
-        self._menu(card, self.lang_var, list(LANGUAGES)).grid(row=3, column=1, sticky="ew", padx=(9, 18))
+        # --- вкладка «Голос» ---
+        self._cap(tab_voice, "Профиль голоса").grid(row=0, column=0, columnspan=2, sticky="ew",
+                                                     padx=18, pady=(16, 2))
+        profrow = ctk.CTkFrame(tab_voice, fg_color="transparent")
+        profrow.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2))
+        profrow.columnconfigure(0, weight=1)
+        self.profile_menu = self._menu(profrow, self.profile_var, ["Без профиля"] + sorted(self.profiles))
+        self.profile_menu.grid(row=0, column=0, sticky="ew")
+        ctk.CTkButton(profrow, text="Сохранить", width=86, command=self._save_profile,
+                      fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
+                      corner_radius=10, font=(FONT, 12)).grid(row=0, column=1, padx=(8, 0))
+        ctk.CTkButton(profrow, text="Удалить", width=72, command=self._delete_profile,
+                      fg_color=FIELD, hover_color="#34344a", text_color=RED,
+                      corner_radius=10, font=(FONT, 12)).grid(row=0, column=2, padx=(8, 0))
+        # регистрируем обработчик после создания виджетов профиля, чтобы
+        # программная установка self.profile_var выше не могла дёрнуть его раньше времени
+        self.profile_var.trace_add("write", self._on_profile_change)
 
-        volcap = ctk.CTkFrame(card, fg_color="transparent")
-        volcap.grid(row=4, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        self._cap(tab_voice, "Голос диктора").grid(row=2, column=0, sticky="ew", padx=(18, 9), pady=(14, 2))
+        self._menu(tab_voice, self.voice_var, voice_names).grid(row=3, column=0, sticky="ew", padx=(18, 9))
+        self._cap(tab_voice, "Точность (модель)").grid(row=2, column=1, sticky="ew", padx=(9, 18), pady=(14, 2))
+        self._menu(tab_voice, self.model_var, MODELS).grid(row=3, column=1, sticky="ew", padx=(9, 18))
+
+        self._cap(tab_voice, "Скорость речи").grid(row=4, column=0, sticky="ew", padx=(18, 9), pady=(14, 2))
+        self._menu(tab_voice, self.speed_var, list(SPEEDS)).grid(row=5, column=0, sticky="ew", padx=(18, 9))
+        self._cap(tab_voice, "Перевод (диктор на языке)").grid(row=4, column=1, sticky="ew", padx=(9, 18), pady=(14, 2))
+        self._menu(tab_voice, self.lang_var, list(LANGUAGES)).grid(row=5, column=1, sticky="ew", padx=(9, 18))
+
+        volcap = ctk.CTkFrame(tab_voice, fg_color="transparent")
+        volcap.grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
         ctk.CTkLabel(volcap, text="Громкость диктора", text_color=SUB, font=(FONT, 12)).pack(side="left")
         self.vol_lbl = ctk.CTkLabel(volcap, text=f"{self.vol_var.get()}%", text_color=ACCENT, font=(FONT, 12))
         self.vol_lbl.pack(side="right")
-        ctk.CTkSlider(card, from_=0, to=100, variable=self.vol_var, number_of_steps=100,
+        ctk.CTkSlider(tab_voice, from_=0, to=100, variable=self.vol_var, number_of_steps=100,
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
-                      fg_color=FIELD, command=self._on_vol).grid(row=5, column=0, columnspan=2, sticky="ew", padx=18)
+                      fg_color=FIELD, command=self._on_vol).grid(row=7, column=0, columnspan=2, sticky="ew", padx=18)
 
-        pitchcap = ctk.CTkFrame(card, fg_color="transparent")
-        pitchcap.grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
+        pitchcap = ctk.CTkFrame(tab_voice, fg_color="transparent")
+        pitchcap.grid(row=8, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
         ctk.CTkLabel(pitchcap, text="Тон голоса персонажа (только RVC)", text_color=SUB,
                      font=(FONT, 12)).pack(side="left")
         self.pitch_lbl = ctk.CTkLabel(pitchcap, text=self._pitch_text(pitch0), text_color=ACCENT, font=(FONT, 12))
         self.pitch_lbl.pack(side="right")
-        ctk.CTkSlider(card, from_=-12, to=12, variable=self.pitch_var, number_of_steps=24,
+        ctk.CTkSlider(tab_voice, from_=-12, to=12, variable=self.pitch_var, number_of_steps=24,
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
-                      fg_color=FIELD, command=self._on_pitch).grid(row=7, column=0, columnspan=2, sticky="ew", padx=18)
+                      fg_color=FIELD, command=self._on_pitch).grid(row=9, column=0, columnspan=2, sticky="ew",
+                                                                    padx=18, pady=(0, 16))
 
-        self._cap(card, "Микрофон (вход)").grid(row=8, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
-        inrow_dev = ctk.CTkFrame(card, fg_color="transparent")
-        inrow_dev.grid(row=9, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2))
+        # --- вкладка «Устройства» ---
+        self._cap(tab_dev, "Микрофон (вход)").grid(row=0, column=0, columnspan=2, sticky="ew",
+                                                    padx=18, pady=(16, 2))
+        inrow_dev = ctk.CTkFrame(tab_dev, fg_color="transparent")
+        inrow_dev.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2))
         inrow_dev.columnconfigure(0, weight=1)
         self.input_device_menu = self._menu(inrow_dev, self.input_device_var, in_devices)
         self.input_device_menu.grid(row=0, column=0, sticky="ew")
@@ -278,8 +313,8 @@ class DiktorApp:
                       fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
                       corner_radius=10, font=(FONT, 15, "bold")).grid(row=0, column=1, padx=(8, 0))
 
-        microw = ctk.CTkFrame(card, fg_color="transparent")
-        microw.grid(row=10, column=0, columnspan=2, sticky="ew", padx=18, pady=(10, 2))
+        microw = ctk.CTkFrame(tab_dev, fg_color="transparent")
+        microw.grid(row=2, column=0, columnspan=2, sticky="ew", padx=18, pady=(10, 2))
         microw.columnconfigure(1, weight=1)
         ctk.CTkLabel(microw, text="Уровень", text_color=SUB, font=(FONT, 12)).grid(row=0, column=0, padx=(0, 10))
         self.mic_bar = ctk.CTkProgressBar(microw, progress_color=GREEN, fg_color=FIELD,
@@ -287,9 +322,10 @@ class DiktorApp:
         self.mic_bar.grid(row=0, column=1, sticky="ew")
         self.mic_bar.set(0)
 
-        self._cap(card, "Куда выводить звук").grid(row=11, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
-        devrow = ctk.CTkFrame(card, fg_color="transparent")
-        devrow.grid(row=12, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 18))
+        self._cap(tab_dev, "Куда выводить звук").grid(row=3, column=0, columnspan=2, sticky="ew",
+                                                       padx=18, pady=(14, 2))
+        devrow = ctk.CTkFrame(tab_dev, fg_color="transparent")
+        devrow.grid(row=4, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 16))
         devrow.columnconfigure(0, weight=1)
         self.device_menu = self._menu(devrow, self.device_var, devices)
         self.device_menu.grid(row=0, column=0, sticky="ew")
@@ -478,6 +514,66 @@ class DiktorApp:
         self.pitch_lbl.configure(text=self._pitch_text(float(val)))
         self._save_settings()
 
+    # ---------- voice profiles ----------
+    def _refresh_profile_menu(self):
+        self.profile_menu.configure(values=["Без профиля"] + sorted(self.profiles))
+
+    def _save_profile(self):
+        dialog = ctk.CTkInputDialog(text="Имя профиля:", title="Сохранить профиль")
+        name = dialog.get_input()
+        if not name:
+            return
+        name = name.strip()
+        if not name or name == "Без профиля":
+            return
+        self.profiles[name] = {
+            "voice": self.voice_var.get(),
+            "speed": self.speed_var.get(),
+            "lang": self.lang_var.get(),
+            "volume": int(self.vol_var.get()),
+            "pitch": int(self.pitch_var.get()),
+        }
+        self._refresh_profile_menu()
+        self.profile_var.set(name)
+        self._save_settings()
+        self._log(f"Профиль «{name}» сохранён.")
+
+    def _delete_profile(self):
+        name = self.profile_var.get()
+        if name not in self.profiles:
+            return
+        del self.profiles[name]
+        self._refresh_profile_menu()
+        self.profile_var.set("Без профиля")
+        self._save_settings()
+        self._log(f"Профиль «{name}» удалён.")
+
+    def _on_profile_change(self, *args):
+        name = self.profile_var.get()
+        if name != "Без профиля":
+            self._apply_profile(name)
+
+    def _apply_profile(self, name):
+        p = self.profiles.get(name)
+        if not isinstance(p, dict):
+            return
+        voice_pool = list(VOICES) + list(self.rvc_voices)
+        if p.get("voice") in voice_pool:
+            self.voice_var.set(p["voice"])
+        if p.get("speed") in SPEEDS:
+            self.speed_var.set(p["speed"])
+        if p.get("lang") in LANGUAGES:
+            self.lang_var.set(p["lang"])
+        if "volume" in p:
+            v = max(0, min(100, int(p["volume"])))
+            self.vol_var.set(v)
+            self._on_vol(v)
+        if "pitch" in p:
+            pt = max(-12, min(12, int(p["pitch"])))
+            self.pitch_var.set(pt)
+            self._on_pitch(pt)
+        self._log(f"Профиль «{name}» применён.")
+
     def _apply_topmost(self):
         try:
             self.root.attributes("-topmost", bool(self.topmost_var.get()))
@@ -591,7 +687,10 @@ class DiktorApp:
                 self.dot.configure(text_color=color)
                 self.status_lbl.configure(text=label, text_color=color)
         try:
-            self.mic_bar.set(min(1.0, self.mic_level * 4.0))
+            level = min(1.0, self.mic_level * 4.0)
+            self.mic_bar.set(level)
+            color = RED if level > 0.92 else YELLOW if level > 0.6 else GREEN
+            self.mic_bar.configure(progress_color=color)
         except Exception:
             pass
         self.root.after(80, self._drain)
