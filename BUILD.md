@@ -14,19 +14,30 @@
 ## 2. Установить зависимости
 
 В командной строке выполни:
+
+```bat
 py -3.10 -m pip install RealtimeSTT edge-tts sounddevice soundfile numpy faster-whisper silero-vad packaging customtkinter deep-translator pystray pillow keyboard
+```
 
 ## 3. Установить PyTorch
 
 Версия приложения (NVIDIA или CPU) определяется тем, какой PyTorch установлен.
 
 - С видеокартой **NVIDIA** (быстрее):
-py -3.10 -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+  ```bat
+  py -3.10 -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+  ```
 - **Без** видеокарты NVIDIA (работает у всех, медленнее):
-py -3.10 -m pip install torch torchaudio
+  ```bat
+  py -3.10 -m pip install torch torchaudio
+  ```
 
 Проверить, какой режим получится:
+
+```bat
 py -3.10 -c "import torch; print(torch.cuda.is_available())"
+```
+
 `True` — будет использоваться видеокарта, `False` — процессор.
 
 ## 3a. (Необязательно) Кастомные голоса персонажей — RVC
@@ -38,7 +49,10 @@ py -3.10 -c "import torch; print(torch.cuda.is_available())"
 реального времени).
 
 Установка:
+
+```bat
 py -3.10 -m pip install rvc-python
+```
 
 - Если `pip` начнёт собирать `fairseq` из исходников и ругнётся на отсутствие
   компилятора — поставь **Microsoft C++ Build Tools**
@@ -49,13 +63,19 @@ py -3.10 -m pip install rvc-python
   Файл .index класть рядом с .pth — он заметно улучшает качество.
 
 Проверка после установки:
+
+```bat
 py -3.10 -c "from rvc_python.infer import RVCInference; print('rvc ok')"
+```
 
 ## 4. Собрать приложение
 
 Положи в одну папку файлы: `golos_diktora_gui.py`, `sborka_exe.bat`, `hook-webrtcvad.py`, `icon.ico`.
 Затем запусти сборщик:
+
+```bat
 sborka_exe.bat
+```
 
 `sborka_exe.bat` сам проверяет, установлен ли `rvc-python`:
 - Если да — добавляет голоса персонажей (RVC) в сборку.

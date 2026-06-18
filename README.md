@@ -7,6 +7,9 @@
 ![Платформа: Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white)
 ![Лицензия: MIT](https://img.shields.io/github/license/yotsug8/dictor-voice?color=blue)
 ![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
+[![Последний релиз](https://img.shields.io/github/v/release/yotsug8/dictor-voice?label=релиз&color=orange)](https://github.com/yotsug8/dictor-voice/releases/latest)
+
+**[Скачать](#скачать) • [Установка](#установка) • [Как пользоваться](#как-пользоваться) • [Возможности](#возможности) • [Если не работает](#если-не-работает)**
 
 </div>
 
@@ -80,4 +83,4 @@
 
 ## Используемые библиотеки
 
-Список открытых компонентов и их лицензий — в файле [THIRD-PARTY-LICENSES](https://github.com/yotsug8/dictor-voice/blob/main/THIRD-PARTY-LICENSES).
+Список открытых компонентов и их лицензий — в файле [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
