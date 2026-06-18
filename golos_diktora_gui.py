@@ -116,8 +116,8 @@ class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("560x970")
-        self.root.minsize(520, 920)
+        self.root.geometry("560x1010")
+        self.root.minsize(520, 960)
         self.root.configure(fg_color=BG)
 
         self.running = False
@@ -127,7 +127,12 @@ class DiktorApp:
         self._recorder_restart_pending = False
         self.device_map = {}
         self.input_device_map = {}
-        self._play_lock = threading.Lock()
+        # сериализует целиком синтез->RVC->проигрывание: «Тест», озвучку набранного
+        # текста и основной цикл распознавания запускают независимые потоки, и без
+        # общего замка на весь конвейер (а не только на сам sd.play) они могли
+        # озвучивать разные фразы почти одновременно — пользователь слышал, как
+        # будто говорят два диктора сразу
+        self._speak_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
         threading.Thread(target=self._loop.run_forever, daemon=True).start()
         self._testing = False
@@ -202,13 +207,18 @@ class DiktorApp:
         ctk.CTkLabel(self.root, text="После паузы в речи программа озвучит сказанное голосом диктора",
                      text_color=SUB, font=(FONT, 11), anchor="w").pack(fill="x", padx=28)
 
-        tabs = ctk.CTkTabview(self.root, fg_color=CARD, corner_radius=16,
+        # высота задана явно и фиксирована (grid_propagate(False) ниже), иначе
+        # CTkTabview меняет размер под содержимое текущей вкладки — при
+        # переключении на вкладку с меньшим числом строк («Устройства») окно
+        # дёргалось и всё расположенное ниже (кнопки, лог) прыгало на место
+        tabs = ctk.CTkTabview(self.root, height=440, fg_color=CARD, corner_radius=16,
                               segmented_button_fg_color=FIELD,
                               segmented_button_selected_color=ACCENT,
                               segmented_button_selected_hover_color=ACC_HOV,
                               segmented_button_unselected_hover_color="#34344a",
                               text_color=TEXT)
         tabs.pack(fill="x", padx=26, pady=14)
+        tabs.grid_propagate(False)
         tab_voice = tabs.add("Голос")
         tab_dev = tabs.add("Устройства")
         tab_voice.columnconfigure(0, weight=1)
@@ -851,13 +861,12 @@ class DiktorApp:
             self._log("Нет доступных устройств вывода — воспроизведение пропущено.")
             return
         v = max(0, min(100, int(self.vol_var.get()))) / 100.0
-        with self._play_lock:
-            try:
-                sd.stop()
-                sd.play(np.asarray(samples) * v, sr, device=device_idx)
-                sd.wait()
-            except Exception as e:
-                self._log(f"Ошибка воспроизведения: {e}")
+        try:
+            sd.stop()
+            sd.play(np.asarray(samples) * v, sr, device=device_idx)
+            sd.wait()
+        except Exception as e:
+            self._log(f"Ошибка воспроизведения: {e}")
 
     def _resolve_translation(self, text, lang_disp, edge_voice):
         """Если для lang_disp задан перевод — переводит text и возвращает
@@ -874,15 +883,19 @@ class DiktorApp:
 
     def _synth_convert_play(self, text, voice, rate, rvc_path):
         """Синтез -> (опционально) RVC-конверсия -> проигрывание. Общий конвейер
-        для теста, озвучки набранного текста и основного цикла распознавания."""
-        s, sr = self._synth(text, voice, rate)
-        if s is not None and rvc_path:
-            s, sr = self._convert_rvc(s, sr, rvc_path)
-        if s is not None:
-            # индекс устройства берём прямо перед игрой звука, а не заранее:
-            # синтез/RVC может занять много секунд, а пользователь — успеть
-            # обновить список устройств (↻) за это время
-            self._play(s, sr, self._device_idx())
+        для теста, озвучки набранного текста и основного цикла распознавания.
+        Захватывает _speak_lock на весь конвейер, а не только на проигрывание:
+        иначе тест/набранный текст/распознанная речь могли синтезироваться
+        параллельно и выходить в динамики практически одновременно."""
+        with self._speak_lock:
+            s, sr = self._synth(text, voice, rate)
+            if s is not None and rvc_path:
+                s, sr = self._convert_rvc(s, sr, rvc_path)
+            if s is not None:
+                # индекс устройства берём прямо перед игрой звука, а не заранее:
+                # синтез/RVC может занять много секунд, а пользователь — успеть
+                # обновить список устройств (↻) за это время
+                self._play(s, sr, self._device_idx())
 
     # ---------- control ----------
     def toggle(self):
@@ -905,10 +918,20 @@ class DiktorApp:
         self._recorder_restart_pending = True
         self._log(reason_msg)
         self._status(YELLOW, "Перезапуск")
-        try:
-            rec.shutdown()
-        except Exception:
-            pass
+
+        def shutdown():
+            try:
+                rec.shutdown()
+            except Exception:
+                pass
+        # rec.shutdown() вызывается из трассировки model_var/input_device_var,
+        # которая срабатывает прямо на главном потоке Tk (нажатие в выпадающем
+        # списке, выбор профиля) — если shutdown() на секунду заблокируется
+        # (например, ждёт внутренний поток рекордера, который как раз сейчас
+        # отдаёт результат .text() рабочему потоку), всё окно зависает. Гоним
+        # его в отдельном потоке, чтобы интерфейс не подвисал ни при каких
+        # раскладах.
+        threading.Thread(target=shutdown, daemon=True).start()
 
     def _on_model_change(self, *args):
         self._save_settings()
