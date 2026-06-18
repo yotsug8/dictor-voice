@@ -213,6 +213,7 @@ class DiktorApp:
         self.vol_var = ctk.IntVar(value=int(self.cfg.get("volume", 100)))
 
         devices = self._devices()
+        self._cable_found = self._cable_present(devices)
         dev0 = self.cfg.get("device") if self.cfg.get("device") in devices else self._default_device(devices)
         self.device_var = ctk.StringVar(value=dev0)
         self.device_var.trace_add("write", self._on_setting_change)
@@ -302,6 +303,11 @@ class DiktorApp:
                                   font=("Consolas", 12), corner_radius=12, wrap="word")
         self.log.pack(fill="both", expand=True, padx=26, pady=(0, 22))
 
+        if not self._cable_found:
+            self._log("VB-Cable не найден. Без него собеседники вас не услышат. "
+                      "Установите его (https://vb-audio.com/Cable/), перезагрузите ПК "
+                      "и нажмите ↻ рядом со списком устройств.")
+
     # ---------- devices ----------
     def _friendly(self, name):
         if "cable input" in name.lower():
@@ -337,6 +343,10 @@ class DiktorApp:
             labels.append(label)
         return labels or ["(нет устройств)"]
 
+    def _cable_present(self, devices):
+        """True, если среди устройств есть виртуальный микрофон VB-Cable."""
+        return any("cable input" in d.lower() for d in devices)
+
     def _default_device(self, devices):
         for d in devices:
             if "cable input" in d.lower():
@@ -351,7 +361,12 @@ class DiktorApp:
         self.device_menu.configure(values=devices)
         if self.device_var.get() not in devices:
             self.device_var.set(self._default_device(devices))
-        self._log("Список устройств обновлён.")
+        self._cable_found = self._cable_present(devices)
+        if self._cable_found:
+            self._log("Список устройств обновлён. Виртуальный микрофон (VB-Cable) найден.")
+        else:
+            self._log("Список устройств обновлён. VB-Cable пока не найден — "
+                      "установите его и перезагрузите ПК: https://vb-audio.com/Cable/")
 
     def _on_setting_change(self, *args):
         self._save_settings()
@@ -645,6 +660,10 @@ class DiktorApp:
         rate = SPEEDS[self.speed_var.get()]
         idx = self._device_idx()
         self._log("Тест: воспроизвожу проверочную фразу...")
+        if "cable input" in self.device_var.get().lower():
+            self._log("Звук идёт в виртуальный микрофон — в самой программе вы его не услышите, "
+                      "это нормально (его слышат собеседники). Чтобы проверить на слух, "
+                      "временно выберите в списке свои динамики или наушники.")
 
         def run():
             try:
