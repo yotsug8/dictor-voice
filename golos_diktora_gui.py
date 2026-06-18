@@ -327,7 +327,12 @@ class DiktorApp:
                 target = apis.index(pref); break
         self.device_map = {}
         labels = []
-        for idx, dev in enumerate(sd.query_devices()):
+        try:
+            devices = sd.query_devices()
+        except Exception as e:
+            self._log(f"Не удалось получить список устройств вывода: {e}")
+            return ["(нет устройств)"]
+        for idx, dev in enumerate(devices):
             if dev["max_output_channels"] <= 0:
                 continue
             if target is not None and dev["hostapi"] != target:
@@ -664,6 +669,11 @@ class DiktorApp:
         self.test_btn.configure(state="disabled")
         self._save_settings()
         edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
+        # «Тест» — явное действие пользователя, поэтому даём голосу RVC ещё один
+        # шанс, даже если предыдущая попытка попала в чёрный список (например,
+        # из-за разового сбоя сети при скачивании базовых моделей).
+        if rvc_path:
+            self._rvc_failed_paths.discard(rvc_path)
         rate = SPEEDS[self.speed_var.get()]
         idx = self._device_idx()
         self._log("Тест: воспроизвожу проверочную фразу...")
