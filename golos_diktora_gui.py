@@ -405,8 +405,9 @@ class DiktorApp:
             )
             self.tray = pystray.Icon("diktor", img, "Голос Диктора", menu)
             threading.Thread(target=self.tray.run, daemon=True).start()
-        except Exception:
+        except Exception as e:
             self.tray = None
+            self._log(f"Значок в трее недоступен: {e}. Крестик будет закрывать программу.")
 
     def _show(self):
         self.root.deiconify(); self.root.lift()
@@ -526,6 +527,10 @@ class DiktorApp:
             for c in cands:
                 if stem.lower() in os.path.basename(c).lower():
                     return c
+            if len(cands) > 1:
+                self._log(f"RVC: для «{stem}» не нашёл подходящий .index по имени файла, "
+                          f"беру первый попавшийся ({os.path.basename(cands[0])}) — "
+                          f"переименуйте файлы, если он не тот.")
             return cands[0] if cands else ""
         except Exception:
             return ""
@@ -543,17 +548,25 @@ class DiktorApp:
         if self._rvc_loaded_path != model_path:
             index = self._find_index(model_path)
             try:
-                self._rvc.load_model(model_path, index_path=index)
-            except TypeError:
-                self._rvc.load_model(model_path)
-            # параметры передаём максимально совместимо с разными версиями API
-            for params in ({"f0method": "rmvpe", "index_path": index},
-                           {"f0method": "rmvpe"}):
                 try:
-                    self._rvc.set_params(**params)
-                    break
-                except Exception:
-                    continue
+                    self._rvc.load_model(model_path, index_path=index)
+                except TypeError:
+                    self._rvc.load_model(model_path)
+                # параметры передаём максимально совместимо с разными версиями API
+                for params in ({"f0method": "rmvpe", "index_path": index},
+                               {"f0method": "rmvpe"}):
+                    try:
+                        self._rvc.set_params(**params)
+                        break
+                    except Exception:
+                        continue
+            except Exception:
+                # неудачная загрузка может оставить движок в промежуточном
+                # состоянии (ни старая, ни новая модель не загружены толком) —
+                # сбрасываем кэш, чтобы следующий вызов (с любой моделью)
+                # перезагружал с нуля, а не доверял старому _rvc_loaded_path
+                self._rvc_loaded_path = None
+                raise
             self._rvc_loaded_path = model_path
             self._log(f"RVC: модель загружена ({os.path.basename(model_path)}).")
 
@@ -677,7 +690,6 @@ class DiktorApp:
         if rvc_path:
             self._rvc_failed_paths.discard(rvc_path)
         rate = SPEEDS[self.speed_var.get()]
-        idx = self._device_idx()
         self._log("Тест: воспроизвожу проверочную фразу...")
         if "cable input" in self.device_var.get().lower():
             self._log("Звук идёт в виртуальный микрофон — в самой программе вы его не услышите, "
@@ -690,7 +702,10 @@ class DiktorApp:
                 if s is not None and rvc_path:
                     s, sr = self._convert_rvc(s, sr, rvc_path)
                 if s is not None:
-                    self._play(s, sr, idx)
+                    # индекс устройства берём прямо перед игрой звука, а не заранее:
+                    # синтез/RVC может занять много секунд, а пользователь — успеть
+                    # обновить список устройств (↻) за это время
+                    self._play(s, sr, self._device_idx())
                 self._log("Тест завершён.")
             except Exception as e:
                 self._log(f"Ошибка теста: {e}")
@@ -708,7 +723,6 @@ class DiktorApp:
         edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
         lang_disp = self.lang_var.get()
         rate = SPEEDS[self.speed_var.get()]
-        idx = self._device_idx()
 
         def run():
             try:
@@ -725,7 +739,7 @@ class DiktorApp:
                 if s is not None and rvc_path:
                     s, sr = self._convert_rvc(s, sr, rvc_path)
                 if s is not None:
-                    self._play(s, sr, idx)
+                    self._play(s, sr, self._device_idx())
             except Exception as e:
                 self._log(f"Ошибка озвучки текста: {e}")
         threading.Thread(target=run, daemon=True).start()
@@ -738,18 +752,21 @@ class DiktorApp:
         self._start_mic_monitor()
         threading.Thread(target=self._run, daemon=True).start()
 
-    def stop(self):
-        self.running = False
-        self._stop_mic_monitor()
-        self.btn.configure(text="▶  Старт", fg_color=GREEN, hover_color=GREEN_H)
-        self._status(GREY, "Остановлено")
-        self._log("Остановка.")
+    def _discard_recorder(self):
         if self.recorder is not None:
             try:
                 self.recorder.shutdown()
             except Exception:
                 pass
             self.recorder = None
+
+    def stop(self):
+        self.running = False
+        self._stop_mic_monitor()
+        self.btn.configure(text="▶  Старт", fg_color=GREEN, hover_color=GREEN_H)
+        self._status(GREY, "Остановлено")
+        self._log("Остановка.")
+        self._discard_recorder()
 
     def _abort_run(self, recorder_dead=False):
         """Аварийно завершает рабочий поток при ошибке: сбрасывает интерфейс
@@ -841,7 +858,16 @@ class DiktorApp:
                 if self._model_switch_pending and self.running:
                     self._model_switch_pending = False
                     try:
-                        self.recorder = make_recorder()
+                        new_recorder = make_recorder()
+                        if not self.running:
+                            # пользователь успел нажать «Стоп», пока грузилась модель —
+                            # не подменяем self.recorder, иначе его никто не выключит
+                            try:
+                                new_recorder.shutdown()
+                            except Exception:
+                                pass
+                            break
+                        self.recorder = new_recorder
                         errors = 0
                         last_text = ""
                         self._log("Модель распознавания обновлена.")
@@ -861,7 +887,14 @@ class DiktorApp:
                     except Exception:
                         pass
                     try:
-                        self.recorder = make_recorder()
+                        new_recorder = make_recorder()
+                        if not self.running:
+                            try:
+                                new_recorder.shutdown()
+                            except Exception:
+                                pass
+                            break
+                        self.recorder = new_recorder
                         errors = 0
                         self._log("Распознавание перезапущено.")
                         self._status(ACCENT, "Прослушивание")
