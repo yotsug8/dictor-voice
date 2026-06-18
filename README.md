@@ -9,8 +9,6 @@
 ![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
 [![Последний релиз](https://img.shields.io/github/v/release/yotsug8/dictor-voice?label=релиз&color=orange)](https://github.com/yotsug8/dictor-voice/releases/latest)
 
-**[Скачать](#скачать) • [Установка](#установка) • [Как пользоваться](#как-пользоваться) • [Возможности](#возможности) • [Если не работает](#если-не-работает)**
-
 </div>
 
 Замена голоса на синтезированный голос диктора в реальном времени (русский). Для Windows.
@@ -19,17 +17,13 @@
 
 ## Скачать
 
-[![Скачать — версия для NVIDIA](https://img.shields.io/badge/⬇%20Скачать-NVIDIA-3ecf8e?style=for-the-badge)](https://drive.google.com/file/d/1Wlzu2UZX5vxc6VEXWZfGJnkM8mUTNaYE/view?usp=sharing)
-[![Скачать — версия для CPU](https://img.shields.io/badge/⬇%20Скачать-CPU-7c8cff?style=for-the-badge)](https://github.com/yotsug8/dictor-voice/releases)
+[![Скачать NVIDIA-версию](https://img.shields.io/badge/Скачать-NVIDIA-3ecf8e?style=for-the-badge)](https://drive.google.com/file/d/1Wlzu2UZX5vxc6VEXWZfGJnkM8mUTNaYE/view?usp=sharing)
+[![Скачать CPU-версию](https://img.shields.io/badge/Скачать-CPU-7c8cff?style=for-the-badge)](https://github.com/yotsug8/dictor-voice/releases)
 
 - **NVIDIA-версия** — `Diktor-NVIDIA_v1.2.zip`, быстрее, качается с Google Drive (для ПК с видеокартой NVIDIA).
 - **CPU-версия** — `Diktor-CPU_v1.2.zip` в разделе [Releases](https://github.com/yotsug8/dictor-voice/releases), работает у всех, медленнее.
 
 > При скачивании NVIDIA-версии Google Drive может предупредить «не удалось проверить на вирусы» (из-за размера) — это нормально, нажмите «Скачать всё равно».
-
-## Как это работает
-
-![Схема работы: ты говоришь → распознавание речи → голос диктора → виртуальный микрофон → тебя слышат в чате](assets/how-it-works.png)
 
 ## Установка
 
