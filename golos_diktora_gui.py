@@ -924,12 +924,16 @@ class DiktorApp:
         и при смене модели, и при смене микрофона."""
         if not self.running:
             return
-        # self.recorder читаем под тем же замком, что и _install_recorder/
-        # _discard_recorder — иначе между проверкой "не None" и вызовом
-        # .shutdown() рабочий поток мог успеть сбросить self.recorder в None
-        # (например, по нажатию «Стоп»), и вызов ушёл бы в None.shutdown().
+        # Забираем self.recorder и сразу сбрасываем в None под тем же замком,
+        # что и _install_recorder/_discard_recorder — атомарно, как и они:
+        # 1) если «Стоп»/перезапуск из-за серии ошибок уже забрали рекордер
+        #    себе, здесь окажется None — запрос просто молча отменяется, а не
+        #    выключает один и тот же рекордер второй раз (на этот случай уже
+        #    напоролись: второй .shutdown() из stop() мог зависнуть);
+        # 2) рабочий цикл, увидев self.recorder == None, не сможет случайно
+        #    дёрнуть .text() на уже выключаемом объекте на следующей итерации.
         with self._recorder_lock:
-            rec = self.recorder
+            rec, self.recorder = self.recorder, None
         if rec is None:
             return
         self._recorder_restart_pending = True
@@ -1038,11 +1042,19 @@ class DiktorApp:
         # позволяет новому рекордеру пережить stop()/_quit() и зависнуть без владельца.
         with self._recorder_lock:
             rec, self.recorder = self.recorder, None
-        if rec is not None:
+        if rec is None:
+            return
+        # stop()/_quit() вызывают это прямо на главном потоке Tk (нажатие кнопки,
+        # пункт меню трея). rec.shutdown() не гарантированно быстрый — если он
+        # зависнет (например, рекордер как раз отдаёт результат .text() рабочему
+        # потоку), всё окно подвиснет вместе с ним. Гоним в отдельный поток, как
+        # и в _request_recorder_restart.
+        def shutdown():
             try:
                 rec.shutdown()
             except Exception:
                 pass
+        threading.Thread(target=shutdown, daemon=True).start()
 
     def _install_recorder(self, new_recorder):
         """Атомарно ставит new_recorder как текущий рекордер, если приложение
@@ -1132,75 +1144,89 @@ class DiktorApp:
         self._status(ACCENT, "Прослушивание") if not self.muted else self._status(YELLOW, "Пауза")
         last_text = ""
         errors = 0
+
+        def restart_recorder(success_msg):
+            """Пересобирает рекордер свежими настройками. Возвращает False,
+            если рабочий цикл должен сразу завершиться (стоп во время
+            пересборки или ошибка самой пересборки) — иначе True."""
+            nonlocal errors, last_text
+            try:
+                new_recorder = make_recorder()
+                if not self._install_recorder(new_recorder):
+                    return False
+                errors = 0
+                last_text = ""
+                self._log(success_msg)
+                if self.running and not self.muted:
+                    self._status(ACCENT, "Прослушивание")
+                return True
+            except Exception as e2:
+                self._log(f"Не удалось перезапустить распознавание: {e2}")
+                self._abort_run(recorder_dead=True)
+                return False
+
         while self.running:
             try:
                 text = self.recorder.text()
-                if not self.running:
-                    break
-                errors = 0
-                text = (text or "").strip()
-                if len(text) < 2:
-                    continue
-                if text == last_text:
-                    continue
-                last_text = text
-                self._log(f"› {text}")
-                if self.muted:
-                    continue
-
-                rate = SPEEDS[self.speed_var.get()]
-                edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
-                resolved = self._resolve_translation(text, self.lang_var.get(), edge_voice)
-                if resolved is None:
-                    continue
-                out, out_voice = resolved
-
-                self._status(GREEN, "Озвучивание")
-                self._synth_convert_play(out, out_voice, rate, rvc_path)
-                if self.running and not self.muted:
-                    self._status(ACCENT, "Прослушивание")
+                exc = None
             except Exception as e:
-                if self._recorder_restart_pending and self.running:
-                    self._recorder_restart_pending = False
-                    try:
-                        new_recorder = make_recorder()
-                        if not self._install_recorder(new_recorder):
-                            break
-                        errors = 0
-                        last_text = ""
-                        self._log("Распознавание перезапущено с новыми настройками.")
-                        if not self.muted:
-                            self._status(ACCENT, "Прослушивание")
-                    except Exception as e2:
-                        self._log(f"Не удалось сменить модель: {e2}")
-                        self._abort_run(recorder_dead=True)
-                        break
-                    continue
-                self._log(f"Пропущено: {e}")
+                text = None
+                exc = e
+
+            if not self.running:
+                break
+
+            # Проверяем флаг и здесь, а не только в ветке except: AudioToTextRecorder
+            # .shutdown() старого рекордера не обязан заставлять блокирующий .text()
+            # выбросить исключение — он может просто молча вернуть пустую строку.
+            # Раньше из-за этого смена модели/микрофона иногда никогда не подхватывалась:
+            # .text() тихо возвращался, флаг не проверялся, и цикл продолжал звать
+            # .text() на уже выключенном (self.recorder == None) рекордере.
+            if self._recorder_restart_pending:
+                self._recorder_restart_pending = False
+                if not restart_recorder("Распознавание перезапущено с новыми настройками."):
+                    break
+                continue
+
+            if exc is not None:
+                self._log(f"Пропущено: {exc}")
                 errors += 1
                 if errors >= 5 and self.running:
                     self._log("Слишком много ошибок подряд — перезапуск распознавания...")
                     self._status(YELLOW, "Перезапуск")
                     with self._recorder_lock:
-                        old_recorder = self.recorder
-                    try:
-                        if old_recorder is not None:
+                        old_recorder, self.recorder = self.recorder, None
+                    if old_recorder is not None:
+                        try:
                             old_recorder.shutdown()
-                    except Exception:
-                        pass
-                    try:
-                        new_recorder = make_recorder()
-                        if not self._install_recorder(new_recorder):
-                            break
-                        errors = 0
-                        self._log("Распознавание перезапущено.")
-                        if not self.muted:
-                            self._status(ACCENT, "Прослушивание")
-                    except Exception as e2:
-                        self._log(f"Не удалось перезапустить: {e2}")
-                        self._abort_run(recorder_dead=True)
+                        except Exception:
+                            pass
+                    if not restart_recorder("Распознавание перезапущено."):
                         break
                 continue
+
+            errors = 0
+            text = (text or "").strip()
+            if len(text) < 2:
+                continue
+            if text == last_text:
+                continue
+            last_text = text
+            self._log(f"› {text}")
+            if self.muted:
+                continue
+
+            rate = SPEEDS[self.speed_var.get()]
+            edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
+            resolved = self._resolve_translation(text, self.lang_var.get(), edge_voice)
+            if resolved is None:
+                continue
+            out, out_voice = resolved
+
+            self._status(GREEN, "Озвучивание")
+            self._synth_convert_play(out, out_voice, rate, rvc_path)
+            if self.running and not self.muted:
+                self._status(ACCENT, "Прослушивание")
 
 
 if __name__ == "__main__":
