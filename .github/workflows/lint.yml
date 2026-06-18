@@ -1,0 +1,18 @@
+name: Lint
+
+on:
+  push:
+    branches: ["main", "improvements"]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install pyflakes
+      - run: python -m py_compile golos_diktora_gui.py hook-webrtcvad.py
+      - run: python -m pyflakes golos_diktora_gui.py hook-webrtcvad.py

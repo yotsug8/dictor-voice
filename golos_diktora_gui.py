@@ -513,8 +513,10 @@ class DiktorApp:
     def _ensure_rvc(self, model_path):
         """Лениво создаёт движок и (пере)загружает модель. Кэширует между фразами."""
         import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("нужна видеокарта NVIDIA (CUDA недоступна)")
         from rvc_python.infer import RVCInference
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        device = "cuda:0"
         if self._rvc is None:
             self._log("RVC: инициализация движка (первый запуск может качать базовые модели)...")
             self._rvc = RVCInference(device=device)
@@ -718,7 +720,8 @@ class DiktorApp:
             from RealtimeSTT import AudioToTextRecorder
         except Exception as e:
             self._log(f"Не установлены библиотеки: {e}")
-            self._status(RED, "Ошибка"); self.running = False
+            self._status(RED, "Ошибка")
+            self.root.after(0, self.stop)
             return
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -743,7 +746,8 @@ class DiktorApp:
             self.recorder = make_recorder()
         except Exception as e:
             self._log(f"Ошибка запуска: {e}")
-            self._status(RED, "Ошибка"); self.running = False
+            self._status(RED, "Ошибка")
+            self.root.after(0, self.stop)
             return
 
         self._log("Готово к работе.")
@@ -797,7 +801,8 @@ class DiktorApp:
                         self._status(ACCENT, "Прослушивание")
                     except Exception as e2:
                         self._log(f"Не удалось сменить модель: {e2}")
-                        self._status(RED, "Ошибка"); self.running = False
+                        self._status(RED, "Ошибка")
+                        self.root.after(0, self.stop)
                         break
                     continue
                 self._log(f"Пропущено: {e}")
@@ -816,7 +821,8 @@ class DiktorApp:
                         self._status(ACCENT, "Прослушивание")
                     except Exception as e2:
                         self._log(f"Не удалось перезапустить: {e2}")
-                        self._status(RED, "Ошибка"); self.running = False
+                        self._status(RED, "Ошибка")
+                        self.root.after(0, self.stop)
                         break
                 continue
 

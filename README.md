@@ -21,7 +21,7 @@
 [![Скачать CPU-версию](https://img.shields.io/badge/Скачать-CPU-7c8cff?style=for-the-badge)](https://github.com/yotsug8/dictor-voice/releases)
 
 - **NVIDIA-версия** — `Diktor-NVIDIA_v1.2.zip`, быстрее, качается с Google Drive (для ПК с видеокартой NVIDIA).
-- **CPU-версия** — `Diktor-CPU_v1.2.zip` в разделе [Releases](https://github.com/yotsug8/dictor-voice/releases), работает у всех, медленнее.
+- **CPU-версия** — `Diktor_CPU_v1.2.zip` в разделе [Releases](https://github.com/yotsug8/dictor-voice/releases), работает у всех, медленнее.
 
 > При скачивании NVIDIA-версии Google Drive может предупредить «не удалось проверить на вирусы» (из-за размера) — это нормально, нажмите «Скачать всё равно».
 
