@@ -65,8 +65,10 @@ import customtkinter as ctk
 
 
 # ---- palette ----
-BG="#15151f"; CARD="#1f1f2e"; FIELD="#2a2a3c"; TEXT="#e6e9f0"; SUB="#9aa0b4"
-ACCENT="#7c8cff"; ACC_HOV="#6675f0"; GREEN="#3ecf8e"; GREEN_H="#34b87d"
+# BG/CARD/CARD2/FIELD — четыре уровня "глубины" (фон окна -> вкладки -> приподнятые
+# плашки внутри них -> поля ввода), чтобы интерфейс не выглядел одной плоской заливкой
+BG="#10101a"; CARD="#1a1a28"; CARD2="#242438"; FIELD="#2c2c42"; TEXT="#eef0f8"; SUB="#9aa0b4"
+ACCENT="#7c8cff"; ACC_HOV="#6675f0"; ACCENT_SOFT="#32325a"; GREEN="#3ecf8e"; GREEN_H="#34b87d"
 RED="#f0617f"; RED_H="#db5071"; YELLOW="#f5c860"; GREY="#5b5f70"
 
 VOICES = {
@@ -116,8 +118,8 @@ class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("560x1010")
-        self.root.minsize(520, 960)
+        self.root.geometry("580x1010")
+        self.root.minsize(540, 960)
         self.root.configure(fg_color=BG)
 
         self.running = False
@@ -189,20 +191,26 @@ class DiktorApp:
     def _menu(self, parent, variable, values, **kw):
         return ctk.CTkOptionMenu(parent, variable=variable, values=values,
                                  fg_color=FIELD, button_color=FIELD,
-                                 button_hover_color="#34344a", text_color=TEXT,
+                                 button_hover_color="#3a3a54", text_color=TEXT,
                                  dropdown_fg_color=CARD, dropdown_hover_color=FIELD,
                                  dropdown_text_color=TEXT, corner_radius=10,
                                  font=(FONT, 12), dropdown_font=(FONT, 12), **kw)
 
     def _build(self):
         head = ctk.CTkFrame(self.root, fg_color="transparent")
-        head.pack(fill="x", padx=26, pady=(20, 2))
+        head.pack(fill="x", padx=26, pady=(22, 4))
+        ctk.CTkLabel(head, text="🎙", text_color=ACCENT, fg_color=ACCENT_SOFT,
+                     corner_radius=20, width=40, height=40, font=(FONT, 17)).pack(side="left")
         ctk.CTkLabel(head, text="Голос Диктора", text_color=TEXT,
-                     font=(FONT, 24, "bold")).pack(side="left")
-        self.dot = ctk.CTkLabel(head, text="●", text_color=GREY, font=(FONT, 14))
-        self.dot.pack(side="right", padx=(6, 0))
-        self.status_lbl = ctk.CTkLabel(head, text="Остановлено", text_color=SUB, font=(FONT, 12))
-        self.status_lbl.pack(side="right")
+                     font=(FONT, 23, "bold")).pack(side="left", padx=(12, 0))
+
+        self.status_pill = ctk.CTkFrame(head, fg_color=CARD2, corner_radius=999, height=30)
+        self.status_pill.pack(side="right")
+        self.dot = ctk.CTkLabel(self.status_pill, text="●", text_color=GREY, font=(FONT, 13))
+        self.dot.pack(side="left", padx=(14, 4), pady=4)
+        self.status_lbl = ctk.CTkLabel(self.status_pill, text="Остановлено", text_color=SUB,
+                                       font=(FONT, 12, "bold"))
+        self.status_lbl.pack(side="left", padx=(0, 14), pady=4)
 
         ctk.CTkLabel(self.root, text="После паузы в речи программа озвучит сказанное голосом диктора",
                      text_color=SUB, font=(FONT, 11), anchor="w").pack(fill="x", padx=28)
@@ -211,16 +219,20 @@ class DiktorApp:
         # CTkTabview меняет размер под содержимое текущей вкладки — при
         # переключении на вкладку с меньшим числом строк («Устройства») окно
         # дёргалось и всё расположенное ниже (кнопки, лог) прыгало на место
-        tabs = ctk.CTkTabview(self.root, height=440, fg_color=CARD, corner_radius=16,
+        tabs = ctk.CTkTabview(self.root, height=440, fg_color=CARD, corner_radius=18,
                               segmented_button_fg_color=FIELD,
                               segmented_button_selected_color=ACCENT,
                               segmented_button_selected_hover_color=ACC_HOV,
-                              segmented_button_unselected_hover_color="#34344a",
+                              segmented_button_unselected_hover_color="#3a3a54",
                               text_color=TEXT)
         tabs.pack(fill="x", padx=26, pady=14)
         tabs.grid_propagate(False)
-        tab_voice = tabs.add("Голос")
-        tab_dev = tabs.add("Устройства")
+        try:
+            tabs._segmented_button.configure(font=(FONT, 13, "bold"))
+        except Exception:
+            pass
+        tab_voice = tabs.add("🎙  Голос")
+        tab_dev = tabs.add("🎧  Устройства")
         tab_voice.columnconfigure(0, weight=1)
         tab_voice.columnconfigure(1, weight=1)
         tab_dev.columnconfigure(0, weight=1)
@@ -264,18 +276,19 @@ class DiktorApp:
         self.profile_var = ctk.StringVar(value="Без профиля")
 
         # --- вкладка «Голос» ---
-        self._cap(tab_voice, "Профиль голоса").grid(row=0, column=0, columnspan=2, sticky="ew",
+        self._cap(tab_voice, "⭐  Профиль голоса").grid(row=0, column=0, columnspan=2, sticky="ew",
                                                      padx=18, pady=(16, 2))
-        profrow = ctk.CTkFrame(tab_voice, fg_color="transparent")
-        profrow.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2))
+        profrow = ctk.CTkFrame(tab_voice, fg_color=CARD2, corner_radius=12)
+        profrow.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2),
+                     ipadx=10, ipady=8)
         profrow.columnconfigure(0, weight=1)
         self.profile_menu = self._menu(profrow, self.profile_var, ["Без профиля"] + sorted(self.profiles))
         self.profile_menu.grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(profrow, text="Сохранить", width=86, command=self._save_profile,
-                      fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=ACCENT,
                       corner_radius=10, font=(FONT, 12)).grid(row=0, column=1, padx=(8, 0))
         ctk.CTkButton(profrow, text="Удалить", width=72, command=self._delete_profile,
-                      fg_color=FIELD, hover_color="#34344a", text_color=RED,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=RED,
                       corner_radius=10, font=(FONT, 12)).grid(row=0, column=2, padx=(8, 0))
         # регистрируем обработчик после создания виджетов профиля, чтобы
         # программная установка self.profile_var выше не могла дёрнуть его раньше времени
@@ -294,7 +307,9 @@ class DiktorApp:
         volcap = ctk.CTkFrame(tab_voice, fg_color="transparent")
         volcap.grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
         ctk.CTkLabel(volcap, text="Громкость диктора", text_color=SUB, font=(FONT, 12)).pack(side="left")
-        self.vol_lbl = ctk.CTkLabel(volcap, text=f"{self.vol_var.get()}%", text_color=ACCENT, font=(FONT, 12))
+        self.vol_lbl = ctk.CTkLabel(volcap, text=f"{self.vol_var.get()}%", text_color=ACCENT,
+                                    fg_color=ACCENT_SOFT, corner_radius=8, width=48,
+                                    font=(FONT, 12, "bold"))
         self.vol_lbl.pack(side="right")
         ctk.CTkSlider(tab_voice, from_=0, to=100, variable=self.vol_var, number_of_steps=100,
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
@@ -304,7 +319,9 @@ class DiktorApp:
         pitchcap.grid(row=8, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
         ctk.CTkLabel(pitchcap, text="Тон голоса персонажа (только RVC)", text_color=SUB,
                      font=(FONT, 12)).pack(side="left")
-        self.pitch_lbl = ctk.CTkLabel(pitchcap, text=self._pitch_text(pitch0), text_color=ACCENT, font=(FONT, 12))
+        self.pitch_lbl = ctk.CTkLabel(pitchcap, text=self._pitch_text(pitch0), text_color=ACCENT,
+                                      fg_color=ACCENT_SOFT, corner_radius=8, width=48,
+                                      font=(FONT, 12, "bold"))
         self.pitch_lbl.pack(side="right")
         ctk.CTkSlider(tab_voice, from_=-12, to=12, variable=self.pitch_var, number_of_steps=24,
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
@@ -312,7 +329,7 @@ class DiktorApp:
                                                                     padx=18, pady=(0, 16))
 
         # --- вкладка «Устройства» ---
-        self._cap(tab_dev, "Микрофон (вход)").grid(row=0, column=0, columnspan=2, sticky="ew",
+        self._cap(tab_dev, "🎤  Микрофон (вход)").grid(row=0, column=0, columnspan=2, sticky="ew",
                                                     padx=18, pady=(16, 2))
         inrow_dev = ctk.CTkFrame(tab_dev, fg_color="transparent")
         inrow_dev.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2))
@@ -320,7 +337,7 @@ class DiktorApp:
         self.input_device_menu = self._menu(inrow_dev, self.input_device_var, in_devices)
         self.input_device_menu.grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(inrow_dev, text="↻", width=40, command=self.refresh_input_devices,
-                      fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=ACCENT,
                       corner_radius=10, font=(FONT, 15, "bold")).grid(row=0, column=1, padx=(8, 0))
 
         microw = ctk.CTkFrame(tab_dev, fg_color="transparent")
@@ -332,7 +349,7 @@ class DiktorApp:
         self.mic_bar.grid(row=0, column=1, sticky="ew")
         self.mic_bar.set(0)
 
-        self._cap(tab_dev, "Куда выводить звук").grid(row=3, column=0, columnspan=2, sticky="ew",
+        self._cap(tab_dev, "🔈  Куда выводить звук").grid(row=3, column=0, columnspan=2, sticky="ew",
                                                        padx=18, pady=(14, 2))
         devrow = ctk.CTkFrame(tab_dev, fg_color="transparent")
         devrow.grid(row=4, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 16))
@@ -340,28 +357,28 @@ class DiktorApp:
         self.device_menu = self._menu(devrow, self.device_var, devices)
         self.device_menu.grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(devrow, text="↻", width=40, command=self.refresh_devices,
-                      fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=ACCENT,
                       corner_radius=10, font=(FONT, 15, "bold")).grid(row=0, column=1, padx=(8, 0))
 
         btns = ctk.CTkFrame(self.root, fg_color="transparent")
         btns.pack(pady=6)
         self.btn = ctk.CTkButton(btns, text="▶  Старт", command=self.toggle, width=200, height=46,
                                  fg_color=GREEN, hover_color=GREEN_H, text_color="#0c1410",
-                                 corner_radius=14, font=(FONT, 15, "bold"))
+                                 corner_radius=18, font=(FONT, 15, "bold"))
         self.btn.pack(side="left", padx=5)
         self.mute_btn = ctk.CTkButton(btns, text="🔊", command=self.toggle_mute, width=58, height=46,
-                                      fg_color=FIELD, hover_color="#34344a", text_color=TEXT,
-                                      corner_radius=14, font=(FONT, 16))
+                                      fg_color=FIELD, hover_color="#3a3a54", text_color=TEXT,
+                                      corner_radius=18, font=(FONT, 16))
         self.mute_btn.pack(side="left", padx=5)
-        self.test_btn = ctk.CTkButton(btns, text="Тест", command=self.test, width=80, height=46,
-                                      fg_color=FIELD, hover_color="#34344a", text_color=TEXT,
-                                      corner_radius=14, font=(FONT, 13, "bold"))
+        self.test_btn = ctk.CTkButton(btns, text="🔈 Тест", command=self.test, width=96, height=46,
+                                      fg_color=FIELD, hover_color="#3a3a54", text_color=TEXT,
+                                      corner_radius=18, font=(FONT, 13, "bold"))
         self.test_btn.pack(side="left", padx=5)
         ctk.CTkLabel(self.root, text="F8 — пауза звука   •   F9 — старт/стоп   •   крестик сворачивает в трей",
                      text_color=GREY, font=(FONT, 10)).pack(pady=(2, 2))
 
         self.topmost_var = ctk.BooleanVar(value=bool(self.cfg.get("topmost", False)))
-        ctk.CTkSwitch(self.root, text="Поверх всех окон", variable=self.topmost_var,
+        ctk.CTkSwitch(self.root, text="📌  Поверх всех окон", variable=self.topmost_var,
                       command=self._apply_topmost, progress_color=ACCENT,
                       text_color=SUB, font=(FONT, 11)).pack(pady=(0, 2))
         self._apply_topmost()
@@ -371,23 +388,23 @@ class DiktorApp:
         inrow.columnconfigure(0, weight=1)
         self.text_entry = ctk.CTkEntry(inrow, placeholder_text="Введите текст и нажмите Enter — диктор озвучит…",
                                        fg_color=FIELD, text_color=TEXT, border_width=0,
-                                       corner_radius=10, font=(FONT, 12), height=40)
+                                       corner_radius=12, font=(FONT, 12), height=40)
         self.text_entry.grid(row=0, column=0, sticky="ew")
         self.text_entry.bind("<Return>", lambda e: self._say_typed())
-        self.say_btn = ctk.CTkButton(inrow, text="Озвучить", width=92, height=40, command=self._say_typed,
+        self.say_btn = ctk.CTkButton(inrow, text="📤 Озвучить", width=110, height=40, command=self._say_typed,
                                      fg_color=ACCENT, hover_color=ACC_HOV, text_color="#0c1410",
-                                     corner_radius=10, font=(FONT, 12, "bold"))
+                                     corner_radius=12, font=(FONT, 12, "bold"))
         self.say_btn.grid(row=0, column=1, padx=(8, 0))
 
         labrow = ctk.CTkFrame(self.root, fg_color="transparent")
         labrow.pack(fill="x", padx=30, pady=(8, 4))
-        ctk.CTkLabel(labrow, text="РАСПОЗНАННАЯ РЕЧЬ", text_color=GREY,
+        ctk.CTkLabel(labrow, text="📝  РАСПОЗНАННАЯ РЕЧЬ", text_color=GREY,
                      font=(FONT, 10, "bold")).pack(side="left")
         ctk.CTkButton(labrow, text="Очистить", width=72, height=24, command=self._clear_log,
-                      fg_color=FIELD, hover_color="#34344a", text_color=SUB,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=SUB,
                       corner_radius=8, font=(FONT, 10)).pack(side="right")
         self.log = ctk.CTkTextbox(self.root, fg_color=CARD, text_color=TEXT,
-                                  font=("Consolas", 12), corner_radius=12, wrap="word")
+                                  font=("Consolas", 12), corner_radius=14, wrap="word")
         self.log.pack(fill="both", expand=True, padx=26, pady=(0, 22))
 
         if not self._cable_found:
