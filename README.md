@@ -7,7 +7,7 @@
 ![Платформа: Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white)
 ![Лицензия: MIT](https://img.shields.io/github/license/yotsug8/dictor-voice?color=blue)
 ![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
-[![Последний релиз](https://img.shields.io/github/v/release/yotsug8/dictor-voice?label=релиз&color=orange)](https://github.com/yotsug8/dictor-voice/releases/latest)
+[![Последний релиз](https://img.shields.io/github/v/release/yotsug8/dictor-voice?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7&color=orange)](https://github.com/yotsug8/dictor-voice/releases/latest)
 
 </div>
 
