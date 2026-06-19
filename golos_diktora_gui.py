@@ -146,7 +146,6 @@ class DiktorApp:
         self.tray = None
         self.ui_queue = queue.Queue()
         self.mic_level = 0.0
-        self._mic_stream = None
         self._rvc = None
         self._rvc_loaded_path = None
         self._rvc_failed_paths = set()
@@ -671,29 +670,20 @@ class DiktorApp:
         self.root.destroy()
 
     # ---------- mic level ----------
-    def _start_mic_monitor(self):
-        if self._mic_stream is not None:
-            return
-        def cb(indata, frames, time_info, status):
-            try:
-                self.mic_level = float(np.sqrt(np.mean(np.square(indata))))
-            except Exception:
-                self.mic_level = 0.0
+    def _on_audio_chunk(self, chunk):
+        """Считает уровень микрофона прямо из аудиопотока RealtimeSTT.
+        Вызывается из его внутреннего потока на каждый кусок. Намеренно не
+        открываем собственный sd.InputStream на тот же микрофон: два
+        одновременных потока захвата на одном устройстве на Windows душат
+        друг друга, и распознавание оставалось без звука."""
         try:
-            self._mic_stream = sd.InputStream(channels=1, device=self._input_device_idx(), callback=cb)
-            self._mic_stream.start()
-        except Exception as e:
-            self._mic_stream = None
-            self._log(f"Индикатор микрофона недоступен: {e}")
+            data = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+            self.mic_level = float(np.sqrt(np.mean(np.square(data))))
+        except Exception:
+            pass
 
     def _stop_mic_monitor(self):
         self.mic_level = 0.0
-        if self._mic_stream is not None:
-            try:
-                self._mic_stream.stop(); self._mic_stream.close()
-            except Exception:
-                pass
-            self._mic_stream = None
 
     # ---------- hotkey ----------
     def _setup_hotkey(self):
@@ -998,9 +988,9 @@ class DiktorApp:
 
     def _on_input_device_change(self, *args):
         self._save_settings()
-        if self.running:
-            self._stop_mic_monitor()
-            self._start_mic_monitor()
+        # индикатор уровня привязан к рекордеру (on_recorded_chunk), поэтому
+        # отдельно перезапускать монитор не нужно — он подхватит новый
+        # микрофон вместе с пересобранным рекордером
         self._request_recorder_restart(f"Меняю микрофон на «{self.input_device_var.get()}»...")
 
     def toggle_mute(self):
@@ -1069,7 +1059,6 @@ class DiktorApp:
         self.btn.configure(text="■  Стоп", fg_color=RED, hover_color=RED_H)
         self._status(YELLOW, "Загрузка")
         self._save_settings()
-        self._start_mic_monitor()
         threading.Thread(target=self._run, daemon=True).start()
 
     def _discard_recorder(self):
@@ -1175,14 +1164,27 @@ class DiktorApp:
             model = self.model_var.get()
             beam = MODEL_BEAM.get(model, 5)
             self._log(f"Модель: {model}  |  точность: float32  |  beam: {beam}")
-            return AudioToTextRecorder(
+            kw = dict(
                 model=model, language="ru", spinner=False,
                 device=device, compute_type=compute,
                 post_speech_silence_duration=0.4,
                 beam_size=beam,
                 initial_prompt=WHISPER_PROMPT,
                 input_device_index=self._input_device_idx(),
+                # индикатор уровня микрофона питаем из того же потока, что и
+                # распознавание — БЕЗ отдельного sd.InputStream на тот же
+                # микрофон. Раньше второй поток на то же устройство душил поток
+                # RealtimeSTT (звук шёл в индикатор, а распознавание получало
+                # тишину — отсюда «звук есть, а слов нет»).
+                on_recorded_chunk=self._on_audio_chunk,
             )
+            try:
+                return AudioToTextRecorder(**kw)
+            except TypeError:
+                # на случай версии RealtimeSTT без on_recorded_chunk —
+                # лучше работающее распознавание без индикатора, чем падение
+                kw.pop("on_recorded_chunk", None)
+                return AudioToTextRecorder(**kw)
 
         # если пользователь только что нажал «Стоп» и сразу «Старт», shutdown()
         # предыдущего рекордера может ещё выполняться в фоне — дожидаемся его,
