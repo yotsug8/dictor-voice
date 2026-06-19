@@ -137,7 +137,6 @@ class DiktorApp:
         # новый (см. _join_recorder_shutdown). Доступ только под _recorder_lock.
         self._recorder_shutdown_threads = []
         self.device_map = {}
-        self.input_device_map = {}
         # сериализует целиком синтез->RVC->проигрывание: «Тест», озвучку набранного
         # текста и основной цикл распознавания запускают независимые потоки, и без
         # общего замка на весь конвейер (а не только на сам sd.play) они могли
@@ -195,7 +194,6 @@ class DiktorApp:
             self._cur_voice = self.voice_var.get()
             self._cur_model = self.model_var.get()
             self._cur_output = self.device_var.get()
-            self._cur_input = self.input_device_var.get()
             self._cur_speed = self.speed_var.get()
             self._cur_lang = self.lang_var.get()
             self._cur_vol = max(0, min(100, int(self.vol_var.get())))
@@ -213,7 +211,6 @@ class DiktorApp:
                     "voice": self._cur_voice,
                     "model": self._cur_model,
                     "device": self._cur_output,
-                    "input_device": self._cur_input,
                     "speed": self._cur_speed,
                     "lang": self._cur_lang,
                     "volume": self._cur_vol,
@@ -307,12 +304,6 @@ class DiktorApp:
         self.device_var = ctk.StringVar(value=dev0)
         self.device_var.trace_add("write", self._on_setting_change)
 
-        in_devices = self._input_devices()
-        indev0 = (self.cfg.get("input_device") if self.cfg.get("input_device") in in_devices
-                  else self._default_input_device(in_devices))
-        self.input_device_var = ctk.StringVar(value=indev0)
-        self.input_device_var.trace_add("write", self._on_input_device_change)
-
         self.profile_var = ctk.StringVar(value="Без профиля")
 
         # --- вкладка «Голос» ---
@@ -369,19 +360,14 @@ class DiktorApp:
                                                                     padx=18, pady=(0, 16))
 
         # --- вкладка «Устройства» ---
-        self._cap(tab_dev, "🎤  Микрофон (вход)").grid(row=0, column=0, columnspan=2, sticky="ew",
-                                                    padx=18, pady=(16, 2))
-        inrow_dev = ctk.CTkFrame(tab_dev, fg_color="transparent")
-        inrow_dev.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2))
-        inrow_dev.columnconfigure(0, weight=1)
-        self.input_device_menu = self._menu(inrow_dev, self.input_device_var, in_devices)
-        self.input_device_menu.grid(row=0, column=0, sticky="ew")
-        ctk.CTkButton(inrow_dev, text="↻", width=40, command=self.refresh_input_devices,
-                      fg_color=FIELD, hover_color="#3a3a54", text_color=ACCENT,
-                      corner_radius=10, font=(FONT, 15, "bold")).grid(row=0, column=1, padx=(8, 0))
+        # Микрофон — всегда системный по умолчанию (input_device_index=None).
+        # Так распознавание гарантированно слушает тот же вход, что выбран в
+        # Windows, без сопоставления индексов sounddevice<->PyAudio.
+        self._cap(tab_dev, "🎤  Микрофон (системный по умолчанию)").grid(
+            row=0, column=0, columnspan=2, sticky="ew", padx=18, pady=(16, 2))
 
         microw = ctk.CTkFrame(tab_dev, fg_color="transparent")
-        microw.grid(row=2, column=0, columnspan=2, sticky="ew", padx=18, pady=(10, 2))
+        microw.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(2, 2))
         microw.columnconfigure(1, weight=1)
         ctk.CTkLabel(microw, text="Уровень", text_color=SUB, font=(FONT, 12)).grid(row=0, column=0, padx=(0, 10))
         self.mic_bar = ctk.CTkProgressBar(microw, progress_color=GREEN, fg_color=FIELD,
@@ -389,10 +375,10 @@ class DiktorApp:
         self.mic_bar.grid(row=0, column=1, sticky="ew")
         self.mic_bar.set(0)
 
-        self._cap(tab_dev, "🔈  Куда выводить звук").grid(row=3, column=0, columnspan=2, sticky="ew",
+        self._cap(tab_dev, "🔈  Куда выводить звук").grid(row=2, column=0, columnspan=2, sticky="ew",
                                                        padx=18, pady=(14, 2))
         devrow = ctk.CTkFrame(tab_dev, fg_color="transparent")
-        devrow.grid(row=4, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 16))
+        devrow.grid(row=3, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 16))
         devrow.columnconfigure(0, weight=1)
         self.device_menu = self._menu(devrow, self.device_var, devices)
         self.device_menu.grid(row=0, column=0, sticky="ew")
@@ -505,14 +491,6 @@ class DiktorApp:
         self.device_map = result
         return labels or ["(нет устройств)"]
 
-    def _input_devices(self):
-        labels, result = self._query_devices("max_input_channels")
-        if labels is None:
-            self._log(f"Не удалось получить список микрофонов: {result}")
-            return ["(нет устройств)"]
-        self.input_device_map = result
-        return labels or ["(нет устройств)"]
-
     def _cable_present(self, devices):
         """True, если среди устройств есть виртуальный микрофон VB-Cable."""
         return any("cable input" in d.lower() for d in devices)
@@ -521,17 +499,6 @@ class DiktorApp:
         for d in devices:
             if "cable input" in d.lower():
                 return d
-        return devices[0]
-
-    def _default_input_device(self, devices):
-        """Системный микрофон по умолчанию, если он есть в списке; иначе первый."""
-        try:
-            default_idx = sd.default.device[0]
-            for label, idx in self.input_device_map.items():
-                if idx == default_idx:
-                    return label
-        except Exception:
-            pass
         return devices[0]
 
     def _map_idx(self, device_map, selected_label):
@@ -548,97 +515,6 @@ class DiktorApp:
         # читаем снимок, а не Tk-переменную: вызывается из рабочих потоков
         return self._map_idx(self.device_map, getattr(self, "_cur_output", self.device_var.get()))
 
-    def _input_device_idx(self):
-        return self._map_idx(self.input_device_map, getattr(self, "_cur_input", self.input_device_var.get()))
-
-    @staticmethod
-    def _names_match(a, b):
-        a = (a or "").strip().lower()
-        b = (b or "").strip().lower()
-        if not a or not b:
-            return False
-        if a == b:
-            return True
-        # MME усекает имена устройств до 31 символа — сравниваем по началу
-        if a[:31] == b[:31]:
-            return True
-        return a in b or b in a
-
-    def _pyaudio_input_index(self):
-        """Сопоставляет выбранный микрофон (перечисление sounddevice) с
-        индексом устройства в PyAudio, которым реально пользуется RealtimeSTT.
-
-        Индексы sounddevice и PyAudio МОГУТ НЕ СОВПАДАТЬ — у библиотек свои
-        сборки PortAudio с разным порядком/набором устройств. Раньше мы
-        передавали индекс sounddevice прямо в RealtimeSTT/PyAudio, и если он
-        указывал на другое устройство, распознавание молча слушало не тот
-        вход: индикатор показывал звук, а слова не распознавались.
-
-        Сопоставляем по ИМЕНИ (и, по возможности, по хост-API). При любой
-        неудаче возвращаем None — тогда RealtimeSTT берёт системный микрофон
-        по умолчанию."""
-        sd_idx = self._input_device_idx()
-        if sd_idx is None:
-            return None
-        try:
-            info = sd.query_devices(sd_idx)
-            want_name = info["name"]
-        except Exception:
-            return None
-        try:
-            host = sd.query_hostapis(info["hostapi"])["name"]
-        except Exception:
-            host = None
-        try:
-            import pyaudio
-        except Exception:
-            # PyAudio здесь недоступен — пусть RealtimeSTT сам разбирается
-            return sd_idx
-        pa = None
-        try:
-            pa = pyaudio.PyAudio()
-            same_host = None
-            any_host = None
-            for i in range(pa.get_device_count()):
-                try:
-                    d = pa.get_device_info_by_index(i)
-                except Exception:
-                    continue
-                if d.get("maxInputChannels", 0) <= 0:
-                    continue
-                if not self._names_match(want_name, d.get("name", "")):
-                    continue
-                if host is not None:
-                    try:
-                        ha = pa.get_host_api_info_by_index(d["hostApi"])["name"]
-                    except Exception:
-                        ha = ""
-                    if host.lower() in ha.lower() or ha.lower() in host.lower():
-                        same_host = (i, d.get("name", ""), ha)
-                        break
-                    if any_host is None:
-                        any_host = (i, d.get("name", ""), ha)
-                else:
-                    self._log(f"Микрофон для распознавания: {d.get('name','')} (PyAudio #{i}).")
-                    return i
-            chosen = same_host or any_host
-            if chosen is not None:
-                i, name, ha = chosen
-                self._log(f"Микрофон для распознавания: {name} (PyAudio #{i}, {ha}).")
-                return i
-            self._log("Выбранный микрофон не найден в PyAudio — беру системный по умолчанию. "
-                      "Если распознавание молчит, выберите микрофон в системе как устройство по умолчанию.")
-            return None
-        except Exception as e:
-            self._log(f"Не удалось сопоставить микрофон с PyAudio ({e}) — беру по умолчанию.")
-            return None
-        finally:
-            if pa is not None:
-                try:
-                    pa.terminate()
-                except Exception:
-                    pass
-
     def refresh_devices(self):
         devices = self._devices()
         self.device_menu.configure(values=devices)
@@ -650,13 +526,6 @@ class DiktorApp:
         else:
             self._log("Список устройств обновлён. VB-Cable пока не найден — "
                       "установите его и перезагрузите ПК: https://vb-audio.com/Cable/")
-
-    def refresh_input_devices(self):
-        devices = self._input_devices()
-        self.input_device_menu.configure(values=devices)
-        if self.input_device_var.get() not in devices:
-            self.input_device_var.set(self._default_input_device(devices))
-        self._log("Список микрофонов обновлён.")
 
     def _on_setting_change(self, *args):
         self._save_settings()
@@ -1106,7 +975,7 @@ class DiktorApp:
                 rec.shutdown()
             except Exception:
                 pass
-        # rec.shutdown() вызывается из трассировки model_var/input_device_var,
+        # rec.shutdown() вызывается из трассировки model_var,
         # которая срабатывает прямо на главном потоке Tk (нажатие в выпадающем
         # списке, выбор профиля) — если shutdown() на секунду заблокируется
         # (например, ждёт внутренний поток рекордера, который как раз сейчас
@@ -1127,13 +996,6 @@ class DiktorApp:
     def _on_model_change(self, *args):
         self._save_settings()
         self._request_recorder_restart(f"Меняю модель распознавания на «{self.model_var.get()}»...")
-
-    def _on_input_device_change(self, *args):
-        self._save_settings()
-        # индикатор уровня привязан к рекордеру (on_recorded_chunk), поэтому
-        # отдельно перезапускать монитор не нужно — он подхватит новый
-        # микрофон вместе с пересобранным рекордером
-        self._request_recorder_restart(f"Меняю микрофон на «{self.input_device_var.get()}»...")
 
     def toggle_mute(self):
         self.muted = not self.muted
@@ -1344,7 +1206,7 @@ class DiktorApp:
                 post_speech_silence_duration=0.4,
                 beam_size=beam,
                 initial_prompt=WHISPER_PROMPT,
-                input_device_index=self._pyaudio_input_index(),
+                input_device_index=None,
                 # индикатор уровня микрофона питаем из того же потока, что и
                 # распознавание — БЕЗ отдельного sd.InputStream на тот же
                 # микрофон. Раньше второй поток на то же устройство душил поток
