@@ -6,6 +6,7 @@ import asyncio
 import datetime
 import threading
 import queue
+import time
 
 # В собранном .exe (PyInstaller) урезанный модуль site не создаёт интерактивные
 # встроенные help/exit/quit/license/credits/copyright. Библиотеки RVC ссылаются
@@ -112,6 +113,8 @@ SETTINGS_FILE = os.path.join(_base_dir(), "settings.json")
 VOICES_DIR = os.path.join(_base_dir(), "voices")
 # базовый голос Edge TTS, поверх которого RVC накладывает тембр персонажа
 RVC_BASE_VOICE = "ru-RU-DmitryNeural"
+# через столько секунд после сбоя RVC снова пробуем конверсию (а не глушим навсегда)
+RVC_RETRY_COOLDOWN = 60
 
 
 class DiktorApp:
@@ -127,10 +130,12 @@ class DiktorApp:
         self.recorder = None
         self._recorder_lock = threading.Lock()
         self._recorder_restart_pending = False
-        # фоновый поток, в котором сейчас (или только что) отрабатывает
-        # rec.shutdown() старого рекордера — рабочий поток дожидается его перед
-        # тем как строить новый (см. _join_recorder_shutdown)
-        self._recorder_shutdown_thread = None
+        # последний «финальный» статус (Остановлено/Ошибка) для _reassert_status
+        self._desired_status = None
+        # фоновые потоки, в которых отрабатывает rec.shutdown() старых
+        # рекордеров — рабочий поток дожидается ВСЕХ их перед тем как строить
+        # новый (см. _join_recorder_shutdown). Доступ только под _recorder_lock.
+        self._recorder_shutdown_threads = []
         self.device_map = {}
         self.input_device_map = {}
         # сериализует целиком синтез->RVC->проигрывание: «Тест», озвучку набранного
@@ -148,7 +153,10 @@ class DiktorApp:
         self.mic_level = 0.0
         self._rvc = None
         self._rvc_loaded_path = None
-        self._rvc_failed_paths = set()
+        # путь RVC-модели -> момент последнего сбоя (time.monotonic). После
+        # сбоя голос временно играет базовым тембром, но через RVC_RETRY_COOLDOWN
+        # секунд снова пробуется — разовый сбой сети не отключает персонажа навсегда
+        self._rvc_failed_paths = {}
         self._rvc_lock = threading.Lock()
         self.rvc_voices = self._scan_rvc_voices()
         self.cfg = self._load_settings()
@@ -175,18 +183,41 @@ class DiktorApp:
         except Exception:
             return {}
 
+    def _sync_settings_snapshot(self):
+        """Снимок текущих настроек в обычные Python-атрибуты.
+
+        Tk-переменные (StringVar/IntVar) нельзя безопасно читать из рабочих
+        потоков: .get() заходит в Tcl, который НЕ потокобезопасен, и на Windows
+        это давало случайные сбои/мусор («много мелких багов»). Поэтому рабочие
+        потоки (распознавание, синтез, проигрывание) читают только эти
+        атрибуты, а обновляем их строго в главном потоке Tk."""
+        try:
+            self._cur_voice = self.voice_var.get()
+            self._cur_model = self.model_var.get()
+            self._cur_output = self.device_var.get()
+            self._cur_input = self.input_device_var.get()
+            self._cur_speed = self.speed_var.get()
+            self._cur_lang = self.lang_var.get()
+            self._cur_vol = max(0, min(100, int(self.vol_var.get())))
+            self._cur_pitch = max(-12, min(12, int(self.pitch_var.get())))
+        except Exception:
+            pass
+
     def _save_settings(self):
+        # снимок делаем здесь, т.к. _save_settings вызывается из главного потока
+        # при любом изменении настроек (трассировки, ползунки, старт, тест)
+        self._sync_settings_snapshot()
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump({
-                    "voice": self.voice_var.get(),
-                    "model": self.model_var.get(),
-                    "device": self.device_var.get(),
-                    "input_device": self.input_device_var.get(),
-                    "speed": self.speed_var.get(),
-                    "lang": self.lang_var.get(),
-                    "volume": int(self.vol_var.get()),
-                    "pitch": int(self.pitch_var.get()),
+                    "voice": self._cur_voice,
+                    "model": self._cur_model,
+                    "device": self._cur_output,
+                    "input_device": self._cur_input,
+                    "speed": self._cur_speed,
+                    "lang": self._cur_lang,
+                    "volume": self._cur_vol,
+                    "pitch": self._cur_pitch,
                     "topmost": bool(self.topmost_var.get()),
                     "profiles": self.profiles,
                 }, f, ensure_ascii=False)
@@ -416,6 +447,9 @@ class DiktorApp:
                                   font=("Consolas", 12), corner_radius=14, wrap="word")
         self.log.pack(fill="both", expand=True, padx=26, pady=(0, 14))
 
+        # начальный снимок настроек для рабочих потоков (см. _sync_settings_snapshot)
+        self._sync_settings_snapshot()
+
         if not self._cable_found:
             self._log("VB-Cable не найден. Без него собеседники вас не услышат. "
                       "Установите его (https://vb-audio.com/Cable/), перезагрузите ПК "
@@ -511,10 +545,99 @@ class DiktorApp:
         return next(iter(device_map.values()))
 
     def _device_idx(self):
-        return self._map_idx(self.device_map, self.device_var.get())
+        # читаем снимок, а не Tk-переменную: вызывается из рабочих потоков
+        return self._map_idx(self.device_map, getattr(self, "_cur_output", self.device_var.get()))
 
     def _input_device_idx(self):
-        return self._map_idx(self.input_device_map, self.input_device_var.get())
+        return self._map_idx(self.input_device_map, getattr(self, "_cur_input", self.input_device_var.get()))
+
+    @staticmethod
+    def _names_match(a, b):
+        a = (a or "").strip().lower()
+        b = (b or "").strip().lower()
+        if not a or not b:
+            return False
+        if a == b:
+            return True
+        # MME усекает имена устройств до 31 символа — сравниваем по началу
+        if a[:31] == b[:31]:
+            return True
+        return a in b or b in a
+
+    def _pyaudio_input_index(self):
+        """Сопоставляет выбранный микрофон (перечисление sounddevice) с
+        индексом устройства в PyAudio, которым реально пользуется RealtimeSTT.
+
+        Индексы sounddevice и PyAudio МОГУТ НЕ СОВПАДАТЬ — у библиотек свои
+        сборки PortAudio с разным порядком/набором устройств. Раньше мы
+        передавали индекс sounddevice прямо в RealtimeSTT/PyAudio, и если он
+        указывал на другое устройство, распознавание молча слушало не тот
+        вход: индикатор показывал звук, а слова не распознавались.
+
+        Сопоставляем по ИМЕНИ (и, по возможности, по хост-API). При любой
+        неудаче возвращаем None — тогда RealtimeSTT берёт системный микрофон
+        по умолчанию."""
+        sd_idx = self._input_device_idx()
+        if sd_idx is None:
+            return None
+        try:
+            info = sd.query_devices(sd_idx)
+            want_name = info["name"]
+        except Exception:
+            return None
+        try:
+            host = sd.query_hostapis(info["hostapi"])["name"]
+        except Exception:
+            host = None
+        try:
+            import pyaudio
+        except Exception:
+            # PyAudio здесь недоступен — пусть RealtimeSTT сам разбирается
+            return sd_idx
+        pa = None
+        try:
+            pa = pyaudio.PyAudio()
+            same_host = None
+            any_host = None
+            for i in range(pa.get_device_count()):
+                try:
+                    d = pa.get_device_info_by_index(i)
+                except Exception:
+                    continue
+                if d.get("maxInputChannels", 0) <= 0:
+                    continue
+                if not self._names_match(want_name, d.get("name", "")):
+                    continue
+                if host is not None:
+                    try:
+                        ha = pa.get_host_api_info_by_index(d["hostApi"])["name"]
+                    except Exception:
+                        ha = ""
+                    if host.lower() in ha.lower() or ha.lower() in host.lower():
+                        same_host = (i, d.get("name", ""), ha)
+                        break
+                    if any_host is None:
+                        any_host = (i, d.get("name", ""), ha)
+                else:
+                    self._log(f"Микрофон для распознавания: {d.get('name','')} (PyAudio #{i}).")
+                    return i
+            chosen = same_host or any_host
+            if chosen is not None:
+                i, name, ha = chosen
+                self._log(f"Микрофон для распознавания: {name} (PyAudio #{i}, {ha}).")
+                return i
+            self._log("Выбранный микрофон не найден в PyAudio — беру системный по умолчанию. "
+                      "Если распознавание молчит, выберите микрофон в системе как устройство по умолчанию.")
+            return None
+        except Exception as e:
+            self._log(f"Не удалось сопоставить микрофон с PyAudio ({e}) — беру по умолчанию.")
+            return None
+        finally:
+            if pa is not None:
+                try:
+                    pa.terminate()
+                except Exception:
+                    pass
 
     def refresh_devices(self):
         devices = self._devices()
@@ -677,8 +800,14 @@ class DiktorApp:
         одновременных потока захвата на одном устройстве на Windows душат
         друг друга, и распознавание оставалось без звука."""
         try:
-            data = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
-            self.mic_level = float(np.sqrt(np.mean(np.square(data))))
+            data = np.frombuffer(chunk, dtype=np.int16)
+            if data.size == 0:
+                return
+            data = data.astype(np.float32) / 32768.0
+            rms = float(np.sqrt(np.mean(np.square(data))))
+            # на пустом/битом куске mean даёт nan — не пускаем его в индикатор,
+            # иначе полоска зависала на максимуме
+            self.mic_level = rms if rms == rms else 0.0
         except Exception:
             pass
 
@@ -714,7 +843,10 @@ class DiktorApp:
                 self.dot.configure(text_color=color)
                 self.status_lbl.configure(text=label, text_color=color)
         try:
-            level = min(1.0, self.mic_level * 4.0)
+            lvl = self.mic_level
+            # множитель 2.5 (а не 4): RMS речи в норме 0.05–0.3, при *4 полоска
+            # почти всегда упиралась в максимум; nan/мусор -> 0
+            level = 0.0 if lvl != lvl else min(1.0, max(0.0, lvl * 2.5))
             self.mic_bar.set(level)
             color = RED if level > 0.92 else YELLOW if level > 0.6 else GREEN
             self.mic_bar.configure(progress_color=color)
@@ -760,6 +892,10 @@ class DiktorApp:
         """display -> (голос Edge TTS для синтеза, путь к RVC-модели или None)."""
         if display in self.rvc_voices:
             return RVC_BASE_VOICE, self.rvc_voices[display]
+        if display not in VOICES:
+            # выбранный голос пропал (например, удалили .pth персонажа при
+            # открытой программе) — иначе пользователь молча получал чужой голос
+            self._log(f"Голос «{display}» не найден — озвучиваю голосом по умолчанию.")
         return VOICES.get(display, list(VOICES.values())[0]), None
 
     def _find_index(self, pth_path):
@@ -816,7 +952,10 @@ class DiktorApp:
 
     def _convert_rvc(self, samples, sr, model_path):
         """Накладывает тембр RVC-модели на синтезированный звук. При сбое — базовый голос."""
-        if model_path in self._rvc_failed_paths:
+        failed_at = self._rvc_failed_paths.get(model_path)
+        if failed_at is not None and (time.monotonic() - failed_at) < RVC_RETRY_COOLDOWN:
+            # недавно сбоила — временно играем базовым голосом, не дёргая RVC,
+            # но по истечении кулдауна попробуем снова
             return samples, sr
         import tempfile
         with self._rvc_lock:
@@ -824,7 +963,7 @@ class DiktorApp:
             try:
                 self._ensure_rvc(model_path)
                 try:
-                    self._rvc.set_params(f0up_key=int(self.pitch_var.get()))
+                    self._rvc.set_params(f0up_key=self._cur_pitch)
                 except Exception:
                     pass
                 fd_in, in_path = tempfile.mkstemp(suffix=".wav"); os.close(fd_in)
@@ -832,11 +971,13 @@ class DiktorApp:
                 sf.write(in_path, samples, sr)
                 self._rvc.infer_file(in_path, out_path)
                 out, out_sr = sf.read(out_path, dtype="float32")
+                self._rvc_failed_paths.pop(model_path, None)
                 return out, out_sr
             except Exception as e:
-                self._rvc_failed_paths.add(model_path)
+                self._rvc_failed_paths[model_path] = time.monotonic()
                 self._log(f"RVC-конверсия недоступна ({e}). Играю базовым голосом; "
-                          f"проверьте установку rvc-python и видеокарту.")
+                          f"снова попробую через {RVC_RETRY_COOLDOWN} с. "
+                          f"Проверьте установку rvc-python и видеокарту.")
                 return samples, sr
             finally:
                 for p in (in_path, out_path):
@@ -897,7 +1038,7 @@ class DiktorApp:
         if device_idx is None:
             self._log("Нет доступных устройств вывода — воспроизведение пропущено.")
             return
-        v = max(0, min(100, int(self.vol_var.get()))) / 100.0
+        v = getattr(self, "_cur_vol", 100) / 100.0
         try:
             sd.stop()
             sd.play(np.asarray(samples) * v, sr, device=device_idx)
@@ -973,13 +1114,14 @@ class DiktorApp:
         # его в отдельном потоке, чтобы интерфейс не подвисал ни при каких
         # раскладах.
         t = threading.Thread(target=shutdown, daemon=True)
-        # рабочий поток дождётся именно этого потока перед make_recorder() —
+        # рабочий поток дождётся этого потока перед make_recorder() —
         # см. _join_recorder_shutdown(). Без этого быстрая смена модели/микрофона
         # (или серия кликов по вкладкам) могла запустить сборку нового
         # рекордера, пока старый ещё не отпустил аудиоустройство и внутренние
         # потоки — два AudioToTextRecorder одновременно дерутся за один и тот
         # же микрофон/CPU, что и давало зависание и ошибку загрузки модели.
-        self._recorder_shutdown_thread = t
+        with self._recorder_lock:
+            self._recorder_shutdown_threads.append(t)
         t.start()
 
     def _on_model_change(self, *args):
@@ -997,6 +1139,12 @@ class DiktorApp:
         self.muted = not self.muted
         if self.muted:
             self.mute_btn.configure(text="🔇", fg_color="#3a2030")
+            # глушим уже играющую фразу сразу, а не только следующую —
+            # F8 для пользователя это «тишина сейчас»
+            try:
+                sd.stop()
+            except Exception:
+                pass
             if self.running:
                 self._status(YELLOW, "Пауза")
         else:
@@ -1014,7 +1162,7 @@ class DiktorApp:
         # шанс, даже если предыдущая попытка попала в чёрный список (например,
         # из-за разового сбоя сети при скачивании базовых моделей).
         if rvc_path:
-            self._rvc_failed_paths.discard(rvc_path)
+            self._rvc_failed_paths.pop(rvc_path, None)
         rate = SPEEDS[self.speed_var.get()]
         self._log("Тест: воспроизвожу проверочную фразу...")
         if "cable input" in self.device_var.get().lower():
@@ -1084,23 +1232,30 @@ class DiktorApp:
         t = threading.Thread(target=shutdown, daemon=True)
         # см. комментарий в _request_recorder_restart: следующий make_recorder()
         # (если пользователь сразу нажмёт «Старт» заново) дождётся этого потока
-        self._recorder_shutdown_thread = t
+        with self._recorder_lock:
+            self._recorder_shutdown_threads.append(t)
         t.start()
 
     def _join_recorder_shutdown(self):
-        """Дожидается завершения отложенного rec.shutdown(), запущенного в фоне
-        _discard_recorder()/_request_recorder_restart(), прежде чем строить
+        """Дожидается завершения ВСЕХ отложенных rec.shutdown(), запущенных в
+        фоне _discard_recorder()/_request_recorder_restart(), прежде чем строить
         новый рекордер. AudioToTextRecorder.shutdown() не гарантирует, что
         устройство ввода и внутренние потоки уже освобождены к моменту, когда
         .text() вышел из блокировки — без этого ожидания make_recorder() мог
         начать открывать тот же микрофон и грузить модель, пока старый рекордер
         ещё не отпустил ресурсы, и оба боролись за один и тот же микрофон/CPU
         (это и давало зависание при частых кликах по вкладкам и сбой загрузки
-        модели). Вызывается только из рабочего потока, поэтому ожидание здесь
-        не блокирует интерфейс."""
-        t, self._recorder_shutdown_thread = self._recorder_shutdown_thread, None
-        if t is not None:
-            t.join()
+        модели). Список читаем-и-чистим под замком в цикле, чтобы не пропустить
+        поток, добавленный главным потоком между итерациями. Вызывается только
+        из рабочего потока, поэтому ожидание здесь не блокирует интерфейс."""
+        while True:
+            with self._recorder_lock:
+                pending = self._recorder_shutdown_threads
+                self._recorder_shutdown_threads = []
+            if not pending:
+                return
+            for t in pending:
+                t.join()
 
     def _install_recorder(self, new_recorder):
         """Атомарно ставит new_recorder как текущий рекордер, если приложение
@@ -1123,11 +1278,28 @@ class DiktorApp:
             pass
         return False
 
+    def _reassert_status(self):
+        """Повторно выставляет «финальный» статус (Остановлено/Ошибка) после
+        того, как очередь UI успела опустеть. Рабочий поток мог поставить в
+        очередь «Прослушивание»/«Озвучивание» за мгновение до того, как заметил
+        running=False — без переустановки индикатор завис бы на нём, хотя
+        кнопка уже «Старт». Срабатывает только если мы всё ещё остановлены."""
+        if self.running or not self._desired_status:
+            return
+        color, label = self._desired_status
+        try:
+            self.dot.configure(text_color=color)
+            self.status_lbl.configure(text=label, text_color=color)
+        except Exception:
+            pass
+
     def stop(self):
         self.running = False
         self._stop_mic_monitor()
         self.btn.configure(text="▶  Старт", fg_color=GREEN, hover_color=GREEN_H)
         self._status(GREY, "Остановлено")
+        self._desired_status = (GREY, "Остановлено")
+        self.root.after(160, self._reassert_status)
         self._log("Остановка.")
         self._discard_recorder()
 
@@ -1143,6 +1315,8 @@ class DiktorApp:
                 self.recorder = None
         self.root.after(0, self.stop)
         self.root.after(0, lambda: self._status(RED, "Ошибка"))
+        # переустанавливаем именно «Ошибку» (а не «Остановлено» от stop())
+        self.root.after(0, lambda: setattr(self, "_desired_status", (RED, "Ошибка")))
 
     # ---------- worker ----------
     def _run(self):
@@ -1161,7 +1335,7 @@ class DiktorApp:
         self._log("Загрузка модели (при первом запуске — загрузка из интернета)...")
 
         def make_recorder():
-            model = self.model_var.get()
+            model = self._cur_model
             beam = MODEL_BEAM.get(model, 5)
             self._log(f"Модель: {model}  |  точность: float32  |  beam: {beam}")
             kw = dict(
@@ -1170,7 +1344,7 @@ class DiktorApp:
                 post_speech_silence_duration=0.4,
                 beam_size=beam,
                 initial_prompt=WHISPER_PROMPT,
-                input_device_index=self._input_device_idx(),
+                input_device_index=self._pyaudio_input_index(),
                 # индикатор уровня микрофона питаем из того же потока, что и
                 # распознавание — БЕЗ отдельного sd.InputStream на тот же
                 # микрофон. Раньше второй поток на то же устройство душил поток
@@ -1207,13 +1381,14 @@ class DiktorApp:
         self._log("Готово к работе.")
         self._status(ACCENT, "Прослушивание") if not self.muted else self._status(YELLOW, "Пауза")
         last_text = ""
+        last_text_time = 0.0
         errors = 0
 
         def restart_recorder(success_msg):
             """Пересобирает рекордер свежими настройками. Возвращает False,
             если рабочий цикл должен сразу завершиться (стоп во время
             пересборки или ошибка самой пересборки) — иначе True."""
-            nonlocal errors, last_text
+            nonlocal errors, last_text, last_text_time
             try:
                 # см. комментарий в _join_recorder_shutdown(): дожидаемся, пока
                 # старый рекордер (выключенный в фоне при смене модели/микрофона)
@@ -1224,6 +1399,7 @@ class DiktorApp:
                     return False
                 errors = 0
                 last_text = ""
+                last_text_time = 0.0
                 self._log(success_msg)
                 if self.running and not self.muted:
                     self._status(ACCENT, "Прослушивание")
@@ -1315,16 +1491,22 @@ class DiktorApp:
             text = (text or "").strip()
             if len(text) < 2:
                 continue
-            if text == last_text:
+            # дубликат подавляем только если он пришёл почти сразу за прошлым
+            # (RealtimeSTT иногда отдаёт ту же фразу дважды). Если пользователь
+            # сознательно повторил короткую фразу («Да», «Да») спустя секунды —
+            # озвучиваем, иначе казалось, что программа «проглатывает» повторы
+            now = time.monotonic()
+            if text == last_text and (now - last_text_time) < 3.0:
                 continue
             last_text = text
+            last_text_time = now
             self._log(f"› {text}")
             if self.muted:
                 continue
 
-            rate = SPEEDS[self.speed_var.get()]
-            edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
-            resolved = self._resolve_translation(text, self.lang_var.get(), edge_voice)
+            rate = SPEEDS.get(self._cur_speed, list(SPEEDS.values())[0])
+            edge_voice, rvc_path = self._resolve_voice(self._cur_voice)
+            resolved = self._resolve_translation(text, self._cur_lang, edge_voice)
             if resolved is None:
                 continue
             out, out_voice = resolved
