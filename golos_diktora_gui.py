@@ -65,8 +65,10 @@ import customtkinter as ctk
 
 
 # ---- palette ----
-BG="#15151f"; CARD="#1f1f2e"; FIELD="#2a2a3c"; TEXT="#e6e9f0"; SUB="#9aa0b4"
-ACCENT="#7c8cff"; ACC_HOV="#6675f0"; GREEN="#3ecf8e"; GREEN_H="#34b87d"
+# BG/CARD/CARD2/FIELD — четыре уровня "глубины" (фон окна -> вкладки -> приподнятые
+# плашки внутри них -> поля ввода), чтобы интерфейс не выглядел одной плоской заливкой
+BG="#10101a"; CARD="#1a1a28"; CARD2="#242438"; FIELD="#2c2c42"; TEXT="#eef0f8"; SUB="#9aa0b4"
+ACCENT="#7c8cff"; ACC_HOV="#6675f0"; ACCENT_SOFT="#32325a"; GREEN="#3ecf8e"; GREEN_H="#34b87d"
 RED="#f0617f"; RED_H="#db5071"; YELLOW="#f5c860"; GREY="#5b5f70"
 
 VOICES = {
@@ -116,8 +118,8 @@ class DiktorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Голос Диктора")
-        self.root.geometry("560x970")
-        self.root.minsize(520, 920)
+        self.root.geometry("680x880")
+        self.root.minsize(620, 800)
         self.root.configure(fg_color=BG)
 
         self.running = False
@@ -125,16 +127,25 @@ class DiktorApp:
         self.recorder = None
         self._recorder_lock = threading.Lock()
         self._recorder_restart_pending = False
+        # фоновый поток, в котором сейчас (или только что) отрабатывает
+        # rec.shutdown() старого рекордера — рабочий поток дожидается его перед
+        # тем как строить новый (см. _join_recorder_shutdown)
+        self._recorder_shutdown_thread = None
         self.device_map = {}
         self.input_device_map = {}
-        self._play_lock = threading.Lock()
+        # сериализует целиком синтез->RVC->проигрывание: «Тест», озвучку набранного
+        # текста и основной цикл распознавания запускают независимые потоки, и без
+        # общего замка на весь конвейер (а не только на сам sd.play) они могли
+        # озвучивать разные фразы почти одновременно — пользователь слышал, как
+        # будто говорят два диктора сразу
+        self._speak_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
         threading.Thread(target=self._loop.run_forever, daemon=True).start()
         self._testing = False
+        self._redraw_after_id = None
         self.tray = None
         self.ui_queue = queue.Queue()
         self.mic_level = 0.0
-        self._mic_stream = None
         self._rvc = None
         self._rvc_loaded_path = None
         self._rvc_failed_paths = set()
@@ -149,6 +160,11 @@ class DiktorApp:
         self._setup_hotkey()
         self._setup_tray()
         self.root.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
+        # переключение вкладок и (особенно) изменение размера окна иногда
+        # оставляют на экране «хвосты» старой отрисовки округлых рамок —
+        # принудительный update_idletasks() после того, как пользователь
+        # перестал тащить рамку/кликать по вкладкам, убирает их
+        self.root.bind("<Configure>", self._on_root_configure)
 
     # ---------- settings ----------
     def _load_settings(self):
@@ -184,31 +200,46 @@ class DiktorApp:
     def _menu(self, parent, variable, values, **kw):
         return ctk.CTkOptionMenu(parent, variable=variable, values=values,
                                  fg_color=FIELD, button_color=FIELD,
-                                 button_hover_color="#34344a", text_color=TEXT,
+                                 button_hover_color="#3a3a54", text_color=TEXT,
                                  dropdown_fg_color=CARD, dropdown_hover_color=FIELD,
                                  dropdown_text_color=TEXT, corner_radius=10,
                                  font=(FONT, 12), dropdown_font=(FONT, 12), **kw)
 
     def _build(self):
         head = ctk.CTkFrame(self.root, fg_color="transparent")
-        head.pack(fill="x", padx=26, pady=(20, 2))
+        head.pack(fill="x", padx=26, pady=(16, 4))
+        ctk.CTkLabel(head, text="🎙", text_color=ACCENT, fg_color=ACCENT_SOFT,
+                     corner_radius=20, width=40, height=40, font=(FONT, 17)).pack(side="left")
         ctk.CTkLabel(head, text="Голос Диктора", text_color=TEXT,
-                     font=(FONT, 24, "bold")).pack(side="left")
-        self.dot = ctk.CTkLabel(head, text="●", text_color=GREY, font=(FONT, 14))
-        self.dot.pack(side="right", padx=(6, 0))
-        self.status_lbl = ctk.CTkLabel(head, text="Остановлено", text_color=SUB, font=(FONT, 12))
-        self.status_lbl.pack(side="right")
+                     font=(FONT, 23, "bold")).pack(side="left", padx=(12, 0))
+
+        self.status_pill = ctk.CTkFrame(head, fg_color=CARD2, corner_radius=999, height=30)
+        self.status_pill.pack(side="right")
+        self.dot = ctk.CTkLabel(self.status_pill, text="●", text_color=GREY, font=(FONT, 13))
+        self.dot.pack(side="left", padx=(14, 4), pady=4)
+        self.status_lbl = ctk.CTkLabel(self.status_pill, text="Остановлено", text_color=SUB,
+                                       font=(FONT, 12, "bold"))
+        self.status_lbl.pack(side="left", padx=(0, 14), pady=4)
 
         ctk.CTkLabel(self.root, text="После паузы в речи программа озвучит сказанное голосом диктора",
                      text_color=SUB, font=(FONT, 11), anchor="w").pack(fill="x", padx=28)
 
-        tabs = ctk.CTkTabview(self.root, fg_color=CARD, corner_radius=16,
+        # высота задана явно и фиксирована (grid_propagate(False) ниже), иначе
+        # CTkTabview меняет размер под содержимое текущей вкладки — при
+        # переключении на вкладку с меньшим числом строк («Устройства») окно
+        # дёргалось и всё расположенное ниже (кнопки, лог) прыгало на место
+        tabs = ctk.CTkTabview(self.root, height=440, fg_color=CARD, corner_radius=18,
                               segmented_button_fg_color=FIELD,
                               segmented_button_selected_color=ACCENT,
                               segmented_button_selected_hover_color=ACC_HOV,
-                              segmented_button_unselected_hover_color="#34344a",
-                              text_color=TEXT)
-        tabs.pack(fill="x", padx=26, pady=14)
+                              segmented_button_unselected_hover_color="#3a3a54",
+                              text_color=TEXT, command=self._force_redraw)
+        tabs.pack(fill="x", padx=26, pady=10)
+        tabs.grid_propagate(False)
+        try:
+            tabs._segmented_button.configure(font=(FONT, 13, "bold"))
+        except Exception:
+            pass
         tab_voice = tabs.add("Голос")
         tab_dev = tabs.add("Устройства")
         tab_voice.columnconfigure(0, weight=1)
@@ -254,18 +285,19 @@ class DiktorApp:
         self.profile_var = ctk.StringVar(value="Без профиля")
 
         # --- вкладка «Голос» ---
-        self._cap(tab_voice, "Профиль голоса").grid(row=0, column=0, columnspan=2, sticky="ew",
+        self._cap(tab_voice, "⭐  Профиль голоса").grid(row=0, column=0, columnspan=2, sticky="ew",
                                                      padx=18, pady=(16, 2))
-        profrow = ctk.CTkFrame(tab_voice, fg_color="transparent")
-        profrow.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2))
+        profrow = ctk.CTkFrame(tab_voice, fg_color=CARD2, corner_radius=12)
+        profrow.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2),
+                     ipadx=10, ipady=8)
         profrow.columnconfigure(0, weight=1)
         self.profile_menu = self._menu(profrow, self.profile_var, ["Без профиля"] + sorted(self.profiles))
         self.profile_menu.grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(profrow, text="Сохранить", width=86, command=self._save_profile,
-                      fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=ACCENT,
                       corner_radius=10, font=(FONT, 12)).grid(row=0, column=1, padx=(8, 0))
         ctk.CTkButton(profrow, text="Удалить", width=72, command=self._delete_profile,
-                      fg_color=FIELD, hover_color="#34344a", text_color=RED,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=RED,
                       corner_radius=10, font=(FONT, 12)).grid(row=0, column=2, padx=(8, 0))
         # регистрируем обработчик после создания виджетов профиля, чтобы
         # программная установка self.profile_var выше не могла дёрнуть его раньше времени
@@ -284,7 +316,9 @@ class DiktorApp:
         volcap = ctk.CTkFrame(tab_voice, fg_color="transparent")
         volcap.grid(row=6, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
         ctk.CTkLabel(volcap, text="Громкость диктора", text_color=SUB, font=(FONT, 12)).pack(side="left")
-        self.vol_lbl = ctk.CTkLabel(volcap, text=f"{self.vol_var.get()}%", text_color=ACCENT, font=(FONT, 12))
+        self.vol_lbl = ctk.CTkLabel(volcap, text=f"{self.vol_var.get()}%", text_color=ACCENT,
+                                    fg_color=ACCENT_SOFT, corner_radius=8, width=48,
+                                    font=(FONT, 12, "bold"))
         self.vol_lbl.pack(side="right")
         ctk.CTkSlider(tab_voice, from_=0, to=100, variable=self.vol_var, number_of_steps=100,
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
@@ -294,7 +328,9 @@ class DiktorApp:
         pitchcap.grid(row=8, column=0, columnspan=2, sticky="ew", padx=18, pady=(14, 2))
         ctk.CTkLabel(pitchcap, text="Тон голоса персонажа (только RVC)", text_color=SUB,
                      font=(FONT, 12)).pack(side="left")
-        self.pitch_lbl = ctk.CTkLabel(pitchcap, text=self._pitch_text(pitch0), text_color=ACCENT, font=(FONT, 12))
+        self.pitch_lbl = ctk.CTkLabel(pitchcap, text=self._pitch_text(pitch0), text_color=ACCENT,
+                                      fg_color=ACCENT_SOFT, corner_radius=8, width=48,
+                                      font=(FONT, 12, "bold"))
         self.pitch_lbl.pack(side="right")
         ctk.CTkSlider(tab_voice, from_=-12, to=12, variable=self.pitch_var, number_of_steps=24,
                       progress_color=ACCENT, button_color=ACCENT, button_hover_color=ACC_HOV,
@@ -302,7 +338,7 @@ class DiktorApp:
                                                                     padx=18, pady=(0, 16))
 
         # --- вкладка «Устройства» ---
-        self._cap(tab_dev, "Микрофон (вход)").grid(row=0, column=0, columnspan=2, sticky="ew",
+        self._cap(tab_dev, "🎤  Микрофон (вход)").grid(row=0, column=0, columnspan=2, sticky="ew",
                                                     padx=18, pady=(16, 2))
         inrow_dev = ctk.CTkFrame(tab_dev, fg_color="transparent")
         inrow_dev.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 2))
@@ -310,7 +346,7 @@ class DiktorApp:
         self.input_device_menu = self._menu(inrow_dev, self.input_device_var, in_devices)
         self.input_device_menu.grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(inrow_dev, text="↻", width=40, command=self.refresh_input_devices,
-                      fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=ACCENT,
                       corner_radius=10, font=(FONT, 15, "bold")).grid(row=0, column=1, padx=(8, 0))
 
         microw = ctk.CTkFrame(tab_dev, fg_color="transparent")
@@ -322,7 +358,7 @@ class DiktorApp:
         self.mic_bar.grid(row=0, column=1, sticky="ew")
         self.mic_bar.set(0)
 
-        self._cap(tab_dev, "Куда выводить звук").grid(row=3, column=0, columnspan=2, sticky="ew",
+        self._cap(tab_dev, "🔈  Куда выводить звук").grid(row=3, column=0, columnspan=2, sticky="ew",
                                                        padx=18, pady=(14, 2))
         devrow = ctk.CTkFrame(tab_dev, fg_color="transparent")
         devrow.grid(row=4, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 16))
@@ -330,55 +366,55 @@ class DiktorApp:
         self.device_menu = self._menu(devrow, self.device_var, devices)
         self.device_menu.grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(devrow, text="↻", width=40, command=self.refresh_devices,
-                      fg_color=FIELD, hover_color="#34344a", text_color=ACCENT,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=ACCENT,
                       corner_radius=10, font=(FONT, 15, "bold")).grid(row=0, column=1, padx=(8, 0))
 
         btns = ctk.CTkFrame(self.root, fg_color="transparent")
-        btns.pack(pady=6)
+        btns.pack(pady=4)
         self.btn = ctk.CTkButton(btns, text="▶  Старт", command=self.toggle, width=200, height=46,
                                  fg_color=GREEN, hover_color=GREEN_H, text_color="#0c1410",
-                                 corner_radius=14, font=(FONT, 15, "bold"))
+                                 corner_radius=18, font=(FONT, 15, "bold"))
         self.btn.pack(side="left", padx=5)
         self.mute_btn = ctk.CTkButton(btns, text="🔊", command=self.toggle_mute, width=58, height=46,
-                                      fg_color=FIELD, hover_color="#34344a", text_color=TEXT,
-                                      corner_radius=14, font=(FONT, 16))
+                                      fg_color=FIELD, hover_color="#3a3a54", text_color=TEXT,
+                                      corner_radius=18, font=(FONT, 16))
         self.mute_btn.pack(side="left", padx=5)
-        self.test_btn = ctk.CTkButton(btns, text="Тест", command=self.test, width=80, height=46,
-                                      fg_color=FIELD, hover_color="#34344a", text_color=TEXT,
-                                      corner_radius=14, font=(FONT, 13, "bold"))
+        self.test_btn = ctk.CTkButton(btns, text="🔈 Тест", command=self.test, width=96, height=46,
+                                      fg_color=FIELD, hover_color="#3a3a54", text_color=TEXT,
+                                      corner_radius=18, font=(FONT, 13, "bold"))
         self.test_btn.pack(side="left", padx=5)
         ctk.CTkLabel(self.root, text="F8 — пауза звука   •   F9 — старт/стоп   •   крестик сворачивает в трей",
                      text_color=GREY, font=(FONT, 10)).pack(pady=(2, 2))
 
         self.topmost_var = ctk.BooleanVar(value=bool(self.cfg.get("topmost", False)))
-        ctk.CTkSwitch(self.root, text="Поверх всех окон", variable=self.topmost_var,
+        ctk.CTkSwitch(self.root, text="📌  Поверх всех окон", variable=self.topmost_var,
                       command=self._apply_topmost, progress_color=ACCENT,
                       text_color=SUB, font=(FONT, 11)).pack(pady=(0, 2))
         self._apply_topmost()
 
         inrow = ctk.CTkFrame(self.root, fg_color="transparent")
-        inrow.pack(fill="x", padx=26, pady=(8, 2))
+        inrow.pack(fill="x", padx=26, pady=(6, 2))
         inrow.columnconfigure(0, weight=1)
         self.text_entry = ctk.CTkEntry(inrow, placeholder_text="Введите текст и нажмите Enter — диктор озвучит…",
                                        fg_color=FIELD, text_color=TEXT, border_width=0,
-                                       corner_radius=10, font=(FONT, 12), height=40)
+                                       corner_radius=12, font=(FONT, 12), height=40)
         self.text_entry.grid(row=0, column=0, sticky="ew")
         self.text_entry.bind("<Return>", lambda e: self._say_typed())
-        self.say_btn = ctk.CTkButton(inrow, text="Озвучить", width=92, height=40, command=self._say_typed,
+        self.say_btn = ctk.CTkButton(inrow, text="📤 Озвучить", width=110, height=40, command=self._say_typed,
                                      fg_color=ACCENT, hover_color=ACC_HOV, text_color="#0c1410",
-                                     corner_radius=10, font=(FONT, 12, "bold"))
+                                     corner_radius=12, font=(FONT, 12, "bold"))
         self.say_btn.grid(row=0, column=1, padx=(8, 0))
 
         labrow = ctk.CTkFrame(self.root, fg_color="transparent")
-        labrow.pack(fill="x", padx=30, pady=(8, 4))
-        ctk.CTkLabel(labrow, text="РАСПОЗНАННАЯ РЕЧЬ", text_color=GREY,
+        labrow.pack(fill="x", padx=30, pady=(6, 3))
+        ctk.CTkLabel(labrow, text="📝  РАСПОЗНАННАЯ РЕЧЬ", text_color=GREY,
                      font=(FONT, 10, "bold")).pack(side="left")
         ctk.CTkButton(labrow, text="Очистить", width=72, height=24, command=self._clear_log,
-                      fg_color=FIELD, hover_color="#34344a", text_color=SUB,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=SUB,
                       corner_radius=8, font=(FONT, 10)).pack(side="right")
         self.log = ctk.CTkTextbox(self.root, fg_color=CARD, text_color=TEXT,
-                                  font=("Consolas", 12), corner_radius=12, wrap="word")
-        self.log.pack(fill="both", expand=True, padx=26, pady=(0, 22))
+                                  font=("Consolas", 12), corner_radius=14, wrap="word")
+        self.log.pack(fill="both", expand=True, padx=26, pady=(0, 14))
 
         if not self._cable_found:
             self._log("VB-Cable не найден. Без него собеседники вас не услышат. "
@@ -634,29 +670,20 @@ class DiktorApp:
         self.root.destroy()
 
     # ---------- mic level ----------
-    def _start_mic_monitor(self):
-        if self._mic_stream is not None:
-            return
-        def cb(indata, frames, time_info, status):
-            try:
-                self.mic_level = float(np.sqrt(np.mean(np.square(indata))))
-            except Exception:
-                self.mic_level = 0.0
+    def _on_audio_chunk(self, chunk):
+        """Считает уровень микрофона прямо из аудиопотока RealtimeSTT.
+        Вызывается из его внутреннего потока на каждый кусок. Намеренно не
+        открываем собственный sd.InputStream на тот же микрофон: два
+        одновременных потока захвата на одном устройстве на Windows душат
+        друг друга, и распознавание оставалось без звука."""
         try:
-            self._mic_stream = sd.InputStream(channels=1, device=self._input_device_idx(), callback=cb)
-            self._mic_stream.start()
-        except Exception as e:
-            self._mic_stream = None
-            self._log(f"Индикатор микрофона недоступен: {e}")
+            data = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+            self.mic_level = float(np.sqrt(np.mean(np.square(data))))
+        except Exception:
+            pass
 
     def _stop_mic_monitor(self):
         self.mic_level = 0.0
-        if self._mic_stream is not None:
-            try:
-                self._mic_stream.stop(); self._mic_stream.close()
-            except Exception:
-                pass
-            self._mic_stream = None
 
     # ---------- hotkey ----------
     def _setup_hotkey(self):
@@ -694,6 +721,26 @@ class DiktorApp:
         except Exception:
             pass
         self.root.after(80, self._drain)
+
+    def _force_redraw(self):
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
+    def _on_root_configure(self, event):
+        if event.widget is not self.root:
+            return
+        if self._redraw_after_id is not None:
+            try:
+                self.root.after_cancel(self._redraw_after_id)
+            except Exception:
+                pass
+        # ждём, пока перетаскивание рамки/серия кликов по вкладкам утихнет,
+        # и только потом форсируем перерисовку — иначе update_idletasks()
+        # на каждое промежуточное событие <Configure> во время самого
+        # перетаскивания будет только тормозить, а не помогать
+        self._redraw_after_id = self.root.after(120, self._force_redraw)
 
     # ---------- voices (RVC) ----------
     def _scan_rvc_voices(self):
@@ -851,13 +898,12 @@ class DiktorApp:
             self._log("Нет доступных устройств вывода — воспроизведение пропущено.")
             return
         v = max(0, min(100, int(self.vol_var.get()))) / 100.0
-        with self._play_lock:
-            try:
-                sd.stop()
-                sd.play(np.asarray(samples) * v, sr, device=device_idx)
-                sd.wait()
-            except Exception as e:
-                self._log(f"Ошибка воспроизведения: {e}")
+        try:
+            sd.stop()
+            sd.play(np.asarray(samples) * v, sr, device=device_idx)
+            sd.wait()
+        except Exception as e:
+            self._log(f"Ошибка воспроизведения: {e}")
 
     def _resolve_translation(self, text, lang_disp, edge_voice):
         """Если для lang_disp задан перевод — переводит text и возвращает
@@ -874,15 +920,19 @@ class DiktorApp:
 
     def _synth_convert_play(self, text, voice, rate, rvc_path):
         """Синтез -> (опционально) RVC-конверсия -> проигрывание. Общий конвейер
-        для теста, озвучки набранного текста и основного цикла распознавания."""
-        s, sr = self._synth(text, voice, rate)
-        if s is not None and rvc_path:
-            s, sr = self._convert_rvc(s, sr, rvc_path)
-        if s is not None:
-            # индекс устройства берём прямо перед игрой звука, а не заранее:
-            # синтез/RVC может занять много секунд, а пользователь — успеть
-            # обновить список устройств (↻) за это время
-            self._play(s, sr, self._device_idx())
+        для теста, озвучки набранного текста и основного цикла распознавания.
+        Захватывает _speak_lock на весь конвейер, а не только на проигрывание:
+        иначе тест/набранный текст/распознанная речь могли синтезироваться
+        параллельно и выходить в динамики практически одновременно."""
+        with self._speak_lock:
+            s, sr = self._synth(text, voice, rate)
+            if s is not None and rvc_path:
+                s, sr = self._convert_rvc(s, sr, rvc_path)
+            if s is not None:
+                # индекс устройства берём прямо перед игрой звука, а не заранее:
+                # синтез/RVC может занять много секунд, а пользователь — успеть
+                # обновить список устройств (↻) за это время
+                self._play(s, sr, self._device_idx())
 
     # ---------- control ----------
     def toggle(self):
@@ -894,21 +944,43 @@ class DiktorApp:
         и при смене модели, и при смене микрофона."""
         if not self.running:
             return
-        # self.recorder читаем под тем же замком, что и _install_recorder/
-        # _discard_recorder — иначе между проверкой "не None" и вызовом
-        # .shutdown() рабочий поток мог успеть сбросить self.recorder в None
-        # (например, по нажатию «Стоп»), и вызов ушёл бы в None.shutdown().
+        # Забираем self.recorder и сразу сбрасываем в None под тем же замком,
+        # что и _install_recorder/_discard_recorder — атомарно, как и они:
+        # 1) если «Стоп»/перезапуск из-за серии ошибок уже забрали рекордер
+        #    себе, здесь окажется None — запрос просто молча отменяется, а не
+        #    выключает один и тот же рекордер второй раз (на этот случай уже
+        #    напоролись: второй .shutdown() из stop() мог зависнуть);
+        # 2) рабочий цикл, увидев self.recorder == None, не сможет случайно
+        #    дёрнуть .text() на уже выключаемом объекте на следующей итерации.
         with self._recorder_lock:
-            rec = self.recorder
+            rec, self.recorder = self.recorder, None
         if rec is None:
             return
         self._recorder_restart_pending = True
         self._log(reason_msg)
         self._status(YELLOW, "Перезапуск")
-        try:
-            rec.shutdown()
-        except Exception:
-            pass
+
+        def shutdown():
+            try:
+                rec.shutdown()
+            except Exception:
+                pass
+        # rec.shutdown() вызывается из трассировки model_var/input_device_var,
+        # которая срабатывает прямо на главном потоке Tk (нажатие в выпадающем
+        # списке, выбор профиля) — если shutdown() на секунду заблокируется
+        # (например, ждёт внутренний поток рекордера, который как раз сейчас
+        # отдаёт результат .text() рабочему потоку), всё окно зависает. Гоним
+        # его в отдельном потоке, чтобы интерфейс не подвисал ни при каких
+        # раскладах.
+        t = threading.Thread(target=shutdown, daemon=True)
+        # рабочий поток дождётся именно этого потока перед make_recorder() —
+        # см. _join_recorder_shutdown(). Без этого быстрая смена модели/микрофона
+        # (или серия кликов по вкладкам) могла запустить сборку нового
+        # рекордера, пока старый ещё не отпустил аудиоустройство и внутренние
+        # потоки — два AudioToTextRecorder одновременно дерутся за один и тот
+        # же микрофон/CPU, что и давало зависание и ошибку загрузки модели.
+        self._recorder_shutdown_thread = t
+        t.start()
 
     def _on_model_change(self, *args):
         self._save_settings()
@@ -916,9 +988,9 @@ class DiktorApp:
 
     def _on_input_device_change(self, *args):
         self._save_settings()
-        if self.running:
-            self._stop_mic_monitor()
-            self._start_mic_monitor()
+        # индикатор уровня привязан к рекордеру (on_recorded_chunk), поэтому
+        # отдельно перезапускать монитор не нужно — он подхватит новый
+        # микрофон вместе с пересобранным рекордером
         self._request_recorder_restart(f"Меняю микрофон на «{self.input_device_var.get()}»...")
 
     def toggle_mute(self):
@@ -987,7 +1059,6 @@ class DiktorApp:
         self.btn.configure(text="■  Стоп", fg_color=RED, hover_color=RED_H)
         self._status(YELLOW, "Загрузка")
         self._save_settings()
-        self._start_mic_monitor()
         threading.Thread(target=self._run, daemon=True).start()
 
     def _discard_recorder(self):
@@ -998,11 +1069,38 @@ class DiktorApp:
         # позволяет новому рекордеру пережить stop()/_quit() и зависнуть без владельца.
         with self._recorder_lock:
             rec, self.recorder = self.recorder, None
-        if rec is not None:
+        if rec is None:
+            return
+        # stop()/_quit() вызывают это прямо на главном потоке Tk (нажатие кнопки,
+        # пункт меню трея). rec.shutdown() не гарантированно быстрый — если он
+        # зависнет (например, рекордер как раз отдаёт результат .text() рабочему
+        # потоку), всё окно подвиснет вместе с ним. Гоним в отдельный поток, как
+        # и в _request_recorder_restart.
+        def shutdown():
             try:
                 rec.shutdown()
             except Exception:
                 pass
+        t = threading.Thread(target=shutdown, daemon=True)
+        # см. комментарий в _request_recorder_restart: следующий make_recorder()
+        # (если пользователь сразу нажмёт «Старт» заново) дождётся этого потока
+        self._recorder_shutdown_thread = t
+        t.start()
+
+    def _join_recorder_shutdown(self):
+        """Дожидается завершения отложенного rec.shutdown(), запущенного в фоне
+        _discard_recorder()/_request_recorder_restart(), прежде чем строить
+        новый рекордер. AudioToTextRecorder.shutdown() не гарантирует, что
+        устройство ввода и внутренние потоки уже освобождены к моменту, когда
+        .text() вышел из блокировки — без этого ожидания make_recorder() мог
+        начать открывать тот же микрофон и грузить модель, пока старый рекордер
+        ещё не отпустил ресурсы, и оба боролись за один и тот же микрофон/CPU
+        (это и давало зависание при частых кликах по вкладкам и сбой загрузки
+        модели). Вызывается только из рабочего потока, поэтому ожидание здесь
+        не блокирует интерфейс."""
+        t, self._recorder_shutdown_thread = self._recorder_shutdown_thread, None
+        if t is not None:
+            t.join()
 
     def _install_recorder(self, new_recorder):
         """Атомарно ставит new_recorder как текущий рекордер, если приложение
@@ -1066,15 +1164,33 @@ class DiktorApp:
             model = self.model_var.get()
             beam = MODEL_BEAM.get(model, 5)
             self._log(f"Модель: {model}  |  точность: float32  |  beam: {beam}")
-            return AudioToTextRecorder(
+            kw = dict(
                 model=model, language="ru", spinner=False,
                 device=device, compute_type=compute,
                 post_speech_silence_duration=0.4,
                 beam_size=beam,
                 initial_prompt=WHISPER_PROMPT,
                 input_device_index=self._input_device_idx(),
+                # индикатор уровня микрофона питаем из того же потока, что и
+                # распознавание — БЕЗ отдельного sd.InputStream на тот же
+                # микрофон. Раньше второй поток на то же устройство душил поток
+                # RealtimeSTT (звук шёл в индикатор, а распознавание получало
+                # тишину — отсюда «звук есть, а слов нет»).
+                on_recorded_chunk=self._on_audio_chunk,
             )
+            try:
+                return AudioToTextRecorder(**kw)
+            except TypeError:
+                # на случай версии RealtimeSTT без on_recorded_chunk —
+                # лучше работающее распознавание без индикатора, чем падение
+                kw.pop("on_recorded_chunk", None)
+                return AudioToTextRecorder(**kw)
 
+        # если пользователь только что нажал «Стоп» и сразу «Старт», shutdown()
+        # предыдущего рекордера может ещё выполняться в фоне — дожидаемся его,
+        # иначе новый AudioToTextRecorder откроет тот же микрофон, пока старый
+        # ещё не отпустил его
+        self._join_recorder_shutdown()
         try:
             new_recorder = make_recorder()
         except Exception as e:
@@ -1092,75 +1208,131 @@ class DiktorApp:
         self._status(ACCENT, "Прослушивание") if not self.muted else self._status(YELLOW, "Пауза")
         last_text = ""
         errors = 0
-        while self.running:
+
+        def restart_recorder(success_msg):
+            """Пересобирает рекордер свежими настройками. Возвращает False,
+            если рабочий цикл должен сразу завершиться (стоп во время
+            пересборки или ошибка самой пересборки) — иначе True."""
+            nonlocal errors, last_text
             try:
-                text = self.recorder.text()
-                if not self.running:
-                    break
+                # см. комментарий в _join_recorder_shutdown(): дожидаемся, пока
+                # старый рекордер (выключенный в фоне при смене модели/микрофона)
+                # действительно отпустит микрофон, прежде чем открывать новый
+                self._join_recorder_shutdown()
+                new_recorder = make_recorder()
+                if not self._install_recorder(new_recorder):
+                    return False
                 errors = 0
-                text = (text or "").strip()
-                if len(text) < 2:
-                    continue
-                if text == last_text:
-                    continue
-                last_text = text
-                self._log(f"› {text}")
-                if self.muted:
-                    continue
-
-                rate = SPEEDS[self.speed_var.get()]
-                edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
-                resolved = self._resolve_translation(text, self.lang_var.get(), edge_voice)
-                if resolved is None:
-                    continue
-                out, out_voice = resolved
-
-                self._status(GREEN, "Озвучивание")
-                self._synth_convert_play(out, out_voice, rate, rvc_path)
+                last_text = ""
+                self._log(success_msg)
                 if self.running and not self.muted:
                     self._status(ACCENT, "Прослушивание")
-            except Exception as e:
-                if self._recorder_restart_pending and self.running:
-                    self._recorder_restart_pending = False
-                    try:
-                        new_recorder = make_recorder()
-                        if not self._install_recorder(new_recorder):
+                return True
+            except Exception as e2:
+                self._log(f"Не удалось перезапустить распознавание: {e2}")
+                self._abort_run(recorder_dead=True)
+                return False
+
+        def call_text_async(rec):
+            """Запускает rec.text() в отдельном потоке вместо того, чтобы ждать
+            его прямо в рабочем цикле. AudioToTextRecorder.shutdown() старого
+            рекордера не гарантированно прерывает уже идущий блокирующий вызов
+            .text() — на практике он мог просто продолжать ждать речь сколько
+            угодно, и смена модели/микрофона повисала до тех пор, пока
+            пользователь не нажимал «Стоп», а потом «Старт» заново. Цикл ниже
+            ждёт результат с таймаутом и параллельно проверяет
+            _recorder_restart_pending, поэтому может пересобрать рекордер,
+            не дожидаясь возврата из старого (всё ещё повисшего) вызова —
+            тот сам завершится позже сам по себе и его результат будет
+            просто отброшен."""
+            call = {"event": threading.Event(), "text": None, "exc": None}
+            def run():
+                try:
+                    call["text"] = rec.text()
+                except Exception as e:
+                    call["exc"] = e
+                finally:
+                    call["event"].set()
+            threading.Thread(target=run, daemon=True).start()
+            return call
+
+        pending_call = None
+        while self.running:
+            if pending_call is None:
+                rec = self.recorder
+                if rec is None:
+                    # рекордер уже забран на пересборку (см. _request_recorder_restart),
+                    # но новый ещё не установлен — короткими порциями ждём,
+                    # не блокируясь насмерть
+                    if self._recorder_restart_pending:
+                        self._recorder_restart_pending = False
+                        if not restart_recorder("Распознавание перезапущено с новыми настройками."):
                             break
-                        errors = 0
-                        last_text = ""
-                        self._log("Распознавание перезапущено с новыми настройками.")
-                        if not self.muted:
-                            self._status(ACCENT, "Прослушивание")
-                    except Exception as e2:
-                        self._log(f"Не удалось сменить модель: {e2}")
-                        self._abort_run(recorder_dead=True)
-                        break
+                    else:
+                        threading.Event().wait(0.05)
                     continue
-                self._log(f"Пропущено: {e}")
+                pending_call = call_text_async(rec)
+
+            finished = pending_call["event"].wait(timeout=0.15)
+
+            if not self.running:
+                break
+
+            # Проверяем флаг здесь, а не только после завершения pending_call:
+            # это и даёт мгновенную смену модели/микрофона, не дожидаясь, пока
+            # (возможно, навсегда повисший) .text() старого рекордера вернётся.
+            if self._recorder_restart_pending:
+                self._recorder_restart_pending = False
+                pending_call = None
+                if not restart_recorder("Распознавание перезапущено с новыми настройками."):
+                    break
+                continue
+
+            if not finished:
+                continue
+
+            text, exc = pending_call["text"], pending_call["exc"]
+            pending_call = None
+
+            if exc is not None:
+                self._log(f"Пропущено: {exc}")
                 errors += 1
                 if errors >= 5 and self.running:
                     self._log("Слишком много ошибок подряд — перезапуск распознавания...")
                     self._status(YELLOW, "Перезапуск")
                     with self._recorder_lock:
-                        old_recorder = self.recorder
-                    try:
-                        if old_recorder is not None:
+                        old_recorder, self.recorder = self.recorder, None
+                    if old_recorder is not None:
+                        try:
                             old_recorder.shutdown()
-                    except Exception:
-                        pass
-                    try:
-                        new_recorder = make_recorder()
-                        if not self._install_recorder(new_recorder):
-                            break
-                        errors = 0
-                        self._log("Распознавание перезапущено.")
-                        if not self.muted:
-                            self._status(ACCENT, "Прослушивание")
-                    except Exception as e2:
-                        self._log(f"Не удалось перезапустить: {e2}")
-                        self._abort_run(recorder_dead=True)
+                        except Exception:
+                            pass
+                    if not restart_recorder("Распознавание перезапущено."):
                         break
                 continue
+
+            errors = 0
+            text = (text or "").strip()
+            if len(text) < 2:
+                continue
+            if text == last_text:
+                continue
+            last_text = text
+            self._log(f"› {text}")
+            if self.muted:
+                continue
+
+            rate = SPEEDS[self.speed_var.get()]
+            edge_voice, rvc_path = self._resolve_voice(self.voice_var.get())
+            resolved = self._resolve_translation(text, self.lang_var.get(), edge_voice)
+            if resolved is None:
+                continue
+            out, out_voice = resolved
+
+            self._status(GREEN, "Озвучивание")
+            self._synth_convert_play(out, out_voice, rate, rvc_path)
+            if self.running and not self.muted:
+                self._status(ACCENT, "Прослушивание")
 
 
 if __name__ == "__main__":
