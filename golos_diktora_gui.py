@@ -142,6 +142,7 @@ class DiktorApp:
         self._loop = asyncio.new_event_loop()
         threading.Thread(target=self._loop.run_forever, daemon=True).start()
         self._testing = False
+        self._redraw_after_id = None
         self.tray = None
         self.ui_queue = queue.Queue()
         self.mic_level = 0.0
@@ -160,6 +161,11 @@ class DiktorApp:
         self._setup_hotkey()
         self._setup_tray()
         self.root.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
+        # переключение вкладок и (особенно) изменение размера окна иногда
+        # оставляют на экране «хвосты» старой отрисовки округлых рамок —
+        # принудительный update_idletasks() после того, как пользователь
+        # перестал тащить рамку/кликать по вкладкам, убирает их
+        self.root.bind("<Configure>", self._on_root_configure)
 
     # ---------- settings ----------
     def _load_settings(self):
@@ -228,15 +234,15 @@ class DiktorApp:
                               segmented_button_selected_color=ACCENT,
                               segmented_button_selected_hover_color=ACC_HOV,
                               segmented_button_unselected_hover_color="#3a3a54",
-                              text_color=TEXT)
+                              text_color=TEXT, command=self._force_redraw)
         tabs.pack(fill="x", padx=26, pady=10)
         tabs.grid_propagate(False)
         try:
             tabs._segmented_button.configure(font=(FONT, 13, "bold"))
         except Exception:
             pass
-        tab_voice = tabs.add("🎙  Голос")
-        tab_dev = tabs.add("🎧  Устройства")
+        tab_voice = tabs.add("Голос")
+        tab_dev = tabs.add("Устройства")
         tab_voice.columnconfigure(0, weight=1)
         tab_voice.columnconfigure(1, weight=1)
         tab_dev.columnconfigure(0, weight=1)
@@ -726,6 +732,26 @@ class DiktorApp:
             pass
         self.root.after(80, self._drain)
 
+    def _force_redraw(self):
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
+
+    def _on_root_configure(self, event):
+        if event.widget is not self.root:
+            return
+        if self._redraw_after_id is not None:
+            try:
+                self.root.after_cancel(self._redraw_after_id)
+            except Exception:
+                pass
+        # ждём, пока перетаскивание рамки/серия кликов по вкладкам утихнет,
+        # и только потом форсируем перерисовку — иначе update_idletasks()
+        # на каждое промежуточное событие <Configure> во время самого
+        # перетаскивания будет только тормозить, а не помогать
+        self._redraw_after_id = self.root.after(120, self._force_redraw)
+
     # ---------- voices (RVC) ----------
     def _scan_rvc_voices(self):
         """Ищет модели голосов (.pth) в папке voices/ рядом с программой."""
@@ -1205,28 +1231,66 @@ class DiktorApp:
                 self._abort_run(recorder_dead=True)
                 return False
 
+        def call_text_async(rec):
+            """Запускает rec.text() в отдельном потоке вместо того, чтобы ждать
+            его прямо в рабочем цикле. AudioToTextRecorder.shutdown() старого
+            рекордера не гарантированно прерывает уже идущий блокирующий вызов
+            .text() — на практике он мог просто продолжать ждать речь сколько
+            угодно, и смена модели/микрофона повисала до тех пор, пока
+            пользователь не нажимал «Стоп», а потом «Старт» заново. Цикл ниже
+            ждёт результат с таймаутом и параллельно проверяет
+            _recorder_restart_pending, поэтому может пересобрать рекордер,
+            не дожидаясь возврата из старого (всё ещё повисшего) вызова —
+            тот сам завершится позже сам по себе и его результат будет
+            просто отброшен."""
+            call = {"event": threading.Event(), "text": None, "exc": None}
+            def run():
+                try:
+                    call["text"] = rec.text()
+                except Exception as e:
+                    call["exc"] = e
+                finally:
+                    call["event"].set()
+            threading.Thread(target=run, daemon=True).start()
+            return call
+
+        pending_call = None
         while self.running:
-            try:
-                text = self.recorder.text()
-                exc = None
-            except Exception as e:
-                text = None
-                exc = e
+            if pending_call is None:
+                rec = self.recorder
+                if rec is None:
+                    # рекордер уже забран на пересборку (см. _request_recorder_restart),
+                    # но новый ещё не установлен — короткими порциями ждём,
+                    # не блокируясь насмерть
+                    if self._recorder_restart_pending:
+                        self._recorder_restart_pending = False
+                        if not restart_recorder("Распознавание перезапущено с новыми настройками."):
+                            break
+                    else:
+                        threading.Event().wait(0.05)
+                    continue
+                pending_call = call_text_async(rec)
+
+            finished = pending_call["event"].wait(timeout=0.15)
 
             if not self.running:
                 break
 
-            # Проверяем флаг и здесь, а не только в ветке except: AudioToTextRecorder
-            # .shutdown() старого рекордера не обязан заставлять блокирующий .text()
-            # выбросить исключение — он может просто молча вернуть пустую строку.
-            # Раньше из-за этого смена модели/микрофона иногда никогда не подхватывалась:
-            # .text() тихо возвращался, флаг не проверялся, и цикл продолжал звать
-            # .text() на уже выключенном (self.recorder == None) рекордере.
+            # Проверяем флаг здесь, а не только после завершения pending_call:
+            # это и даёт мгновенную смену модели/микрофона, не дожидаясь, пока
+            # (возможно, навсегда повисший) .text() старого рекордера вернётся.
             if self._recorder_restart_pending:
                 self._recorder_restart_pending = False
+                pending_call = None
                 if not restart_recorder("Распознавание перезапущено с новыми настройками."):
                     break
                 continue
+
+            if not finished:
+                continue
+
+            text, exc = pending_call["text"], pending_call["exc"]
+            pending_call = None
 
             if exc is not None:
                 self._log(f"Пропущено: {exc}")
