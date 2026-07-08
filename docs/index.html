@@ -149,25 +149,37 @@
     border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow);
     overflow-x: auto;
   }
-  .route-track {
-    display: flex; align-items: stretch; gap: 0; min-width: 620px;
+  .flow {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 10px 6px;
   }
-  .node {
-    flex: 1; display: flex; flex-direction: column; gap: 5px;
-    padding: 14px 12px; text-align: center; border-radius: 12px;
+  .chip {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 14px; min-width: 104px; text-align: center;
   }
-  .node .lbl { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--sub); font-weight: 600; }
-  .node .val { font-size: 14px; font-weight: 650; line-height: 1.3; }
-  .node.you { background: var(--surface-2); }
-  .node.app { background: var(--accent-soft); }
-  .node.app .val { color: var(--accent); }
-  .node.cable { background: var(--surface-2); }
-  .node.cable .val { font-family: var(--mono); font-size: 13px; }
-  .node.dest { background: var(--green-soft); }
-  .node.dest .val { color: var(--green); }
-  .arrow { align-self: center; color: var(--sub); font-size: 20px; padding: 0 6px; flex: none; }
+  .chip .ic { font-size: 22px; line-height: 1; }
+  .chip .t { font-size: 13px; font-weight: 600; line-height: 1.25; color: var(--text); }
+  .chip.hi { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .sep { color: var(--sub); font-size: 18px; flex: none; }
+
+  .pick { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+  .pick .card {
+    background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--accent);
+    border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow);
+  }
+  .pick .card.out { border-top-color: var(--green); }
+  .pick .where { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--sub); font-weight: 600; }
+  .pick .what { margin: 7px 0 12px; font-size: 14px; color: var(--sub); }
+  .pick .val {
+    font-family: var(--mono); font-size: 15px; font-weight: 700;
+    background: var(--accent-soft); color: var(--accent);
+    border-radius: 8px; padding: 8px 12px; display: inline-block;
+  }
+  .pick .card.out .val { background: var(--green-soft); color: var(--green); }
   .route-note { margin: 16px 0 0; font-size: 14px; color: var(--sub); }
   .route-note b { color: var(--text); }
+  @media (max-width: 560px) { .pick { grid-template-columns: 1fr; } }
 
   /* ---- troubleshooting ---- */
   .trouble { display: flex; flex-direction: column; gap: 12px; }
@@ -231,10 +243,16 @@
       <div class="step">
         <div class="n">1</div>
         <div>
-          <h3>Скачайте и распакуйте программу</h3>
-          <p>Возьмите <b>NVIDIA-версию</b>, если у вас видеокарта NVIDIA (быстрее), или
-            <b>CPU-версию</b> — она работает у всех, но медленнее. Распакуйте <code>.zip</code> в любую папку
-            и не вынимайте <code>Diktor.exe</code> из неё.</p>
+          <h3>Скачайте программу с GitHub</h3>
+          <p><b>Есть видеокарта NVIDIA</b> → возьмите <b>NVIDIA-версию</b> (быстрее): на
+            <a href="https://github.com/yotsug8/dictor-voice" target="_blank" rel="noopener">странице проекта на GitHub</a>
+            нажмите зелёную кнопку <b>«Скачать NVIDIA»</b> — откроется Google Drive с файлом
+            <code>Diktor-NVIDIA_….zip</code>.</p>
+          <p><b>Нет видеокарты NVIDIA</b> или не уверены → возьмите <b>CPU-версию</b> (работает у всех,
+            медленнее): на GitHub откройте раздел
+            <a href="https://github.com/yotsug8/dictor-voice/releases" target="_blank" rel="noopener">Releases</a>
+            и скачайте файл <code>Diktor_CPU_….zip</code> (в разделе Assets последнего релиза).</p>
+          <p>Распакуйте архив в любую папку и не вынимайте <code>Diktor.exe</code> из неё.</p>
         </div>
       </div>
       <div class="step">
@@ -262,26 +280,37 @@
   <section>
     <div class="sec-head">
       <span class="sec-num">02</span>
-      <div><h2>Куда идёт звук</h2>
-      <p class="sec-sub">Главная путаница новичков — два конца одного кабеля. Вот как они связаны.</p></div>
+      <div><h2>Как настроить звук</h2>
+      <p class="sec-sub">Всего два выбора — куда программа отдаёт голос и откуда его берёт игра.</p></div>
     </div>
     <div class="route">
-      <div class="route-track">
-        <div class="node you"><span class="lbl">Вы</span><span class="val">Говорите в микрофон</span></div>
-        <div class="arrow">→</div>
-        <div class="node app"><span class="lbl">Голос Диктора</span><span class="val">Выводит звук в…</span></div>
-        <div class="arrow">→</div>
-        <div class="node cable"><span class="lbl">В программе выбрать</span><span class="val">CABLE Input</span></div>
-        <div class="arrow">→</div>
-        <div class="node cable"><span class="lbl">В игре выбрать</span><span class="val">CABLE Output</span></div>
-        <div class="arrow">→</div>
-        <div class="node dest"><span class="lbl">Результат</span><span class="val">Вас слышат собеседники</span></div>
+      <div class="flow">
+        <div class="chip"><span class="ic">🎤</span><span class="t">Ваш микрофон</span></div>
+        <span class="sep">→</span>
+        <div class="chip hi"><span class="ic">🎙️</span><span class="t">«Голос Диктора»<br>меняет голос</span></div>
+        <span class="sep">→</span>
+        <div class="chip"><span class="ic">🔌</span><span class="t">VB-Cable<br>(кабель)</span></div>
+        <span class="sep">→</span>
+        <div class="chip"><span class="ic">🎮</span><span class="t">Игра / Discord</span></div>
+        <span class="sep">→</span>
+        <div class="chip"><span class="ic">🗣️</span><span class="t">Вас слышат</span></div>
       </div>
     </div>
-    <p class="route-note">В приложении «Голос Диктора», на вкладке «Устройства», в поле
-      <b>«Куда выводить звук»</b> выберите <b>CABLE Input</b>. А в самой игре, Discord или звонилке
-      выберите микрофон <b>CABLE Output (VB-Audio)</b>. Свой микрофон программа слушает сама —
-      системный по умолчанию из параметров звука Windows.</p>
+    <div class="pick">
+      <div class="card">
+        <div class="where">1. В программе «Голос Диктора»</div>
+        <p class="what">Вкладка «Устройства» → поле «Куда выводить звук», выберите:</p>
+        <span class="val">CABLE Input</span>
+      </div>
+      <div class="card out">
+        <div class="where">2. В игре, Discord или звонилке</div>
+        <p class="what">Настройки звука → микрофон, выберите:</p>
+        <span class="val">CABLE Output (VB-Audio)</span>
+      </div>
+    </div>
+    <p class="route-note"><b>Это два конца одного кабеля VB-Cable:</b> программа отдаёт голос
+      в «вход» (CABLE Input), а игра берёт его из «выхода» (CABLE Output). Свой обычный микрофон
+      программа слушает сама — системный по умолчанию из параметров звука Windows, отдельно выбирать не нужно.</p>
   </section>
 
   <section>
