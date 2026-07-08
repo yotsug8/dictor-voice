@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Голос Диктора — как установить и настроить: три шага установки, схема звукового маршрута и что делать, если тебя не слышно.">
+<title>Голос Диктора — как установить и настроить</title>
+<style>
+  :root {
+    --bg: #f3f3fb;
+    --surface: #ffffff;
+    --surface-2: #ecebf6;
+    --border: #dededfeb;
+    --text: #16162a;
+    --sub: #565a6e;
+    --accent: #5a63e6;
+    --accent-soft: #e7e6fb;
+    --green: #1ba874;
+    --green-soft: #d8f3e7;
+    --yellow: #b7860b;
+    --yellow-soft: #f7edcf;
+    --red: #d8395c;
+    --red-soft: #fadfe5;
+    --mono: "Consolas", "SFMono-Regular", ui-monospace, monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    --maxw: 860px;
+    --radius: 16px;
+    --shadow: 0 1px 2px rgba(20,20,45,.06), 0 8px 30px rgba(20,20,45,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10101a;
+      --surface: #1a1a28;
+      --surface-2: #242438;
+      --border: #2c2c42;
+      --text: #eef0f8;
+      --sub: #9aa0b4;
+      --accent: #7c8cff;
+      --accent-soft: #2a2a4c;
+      --green: #3ecf8e;
+      --green-soft: #163a2c;
+      --yellow: #f5c860;
+      --yellow-soft: #3a3116;
+      --red: #f0617f;
+      --red-soft: #3d1a26;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.34);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f3f3fb; --surface: #ffffff; --surface-2: #ecebf6; --border: #e3e2ee;
+    --text: #16162a; --sub: #565a6e; --accent: #5a63e6; --accent-soft: #e7e6fb;
+    --green: #1ba874; --green-soft: #d8f3e7; --yellow: #b7860b; --yellow-soft: #f7edcf;
+    --red: #d8395c; --red-soft: #fadfe5;
+    --shadow: 0 1px 2px rgba(20,20,45,.06), 0 8px 30px rgba(20,20,45,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #10101a; --surface: #1a1a28; --surface-2: #242438; --border: #2c2c42;
+    --text: #eef0f8; --sub: #9aa0b4; --accent: #7c8cff; --accent-soft: #2a2a4c;
+    --green: #3ecf8e; --green-soft: #163a2c; --yellow: #f5c860; --yellow-soft: #3a3116;
+    --red: #f0617f; --red-soft: #3d1a26;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 34px rgba(0,0,0,.34);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 20px 72px; }
+
+  /* ---- hero ---- */
+  header {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 56px 20px 30px;
+  }
+  .eyebrow {
+    font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600; margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.04; letter-spacing: -.02em; font-weight: 800;
+    margin: 0 0 16px; text-wrap: balance;
+  }
+  .lede { font-size: clamp(16px, 2.4vw, 19px); color: var(--sub); margin: 0; max-width: 60ch; }
+  .statusrow { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; padding: 7px 14px 7px 12px; font-size: 13px; color: var(--sub);
+    box-shadow: var(--shadow);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dot.g { background: var(--green); } .dot.a { background: var(--accent); } .dot.y { background: var(--yellow); }
+
+  /* ---- sections ---- */
+  section { margin-top: 46px; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  .sec-num {
+    font-family: var(--mono); font-size: 13px; color: var(--accent);
+    background: var(--accent-soft); border-radius: 8px; padding: 3px 9px; font-weight: 600; flex: none;
+  }
+  h2 { font-size: clamp(22px, 3.4vw, 28px); letter-spacing: -.01em; font-weight: 700; margin: 0; text-wrap: balance; }
+  .sec-sub { color: var(--sub); margin: 6px 0 0; font-size: 15px; }
+
+  /* ---- steps ---- */
+  .steps { display: flex; flex-direction: column; gap: 14px; }
+  .step {
+    display: grid; grid-template-columns: 44px 1fr; gap: 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow);
+  }
+  .step .n {
+    width: 44px; height: 44px; border-radius: 12px;
+    display: grid; place-items: center; font-weight: 700; font-size: 18px;
+    background: var(--accent); color: #fff;
+  }
+  .step h3 { margin: 3px 0 5px; font-size: 17px; font-weight: 650; }
+  .step p { margin: 0; color: var(--sub); font-size: 15px; }
+  .step p + p { margin-top: 8px; }
+  kbd {
+    font-family: var(--mono); font-size: .88em; background: var(--surface-2);
+    border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px;
+    padding: 1px 7px; color: var(--text); white-space: nowrap;
+  }
+  code {
+    font-family: var(--mono); font-size: .9em; background: var(--surface-2);
+    border-radius: 5px; padding: 1px 6px; color: var(--text);
+  }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover { border-bottom-color: currentColor; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+  .callout {
+    margin-top: 12px; border-radius: 12px; padding: 13px 16px;
+    background: var(--yellow-soft); border: 1px solid color-mix(in srgb, var(--yellow) 40%, transparent);
+    font-size: 14px; color: var(--text);
+  }
+  .callout b { color: var(--yellow); }
+
+  /* ---- audio route diagram ---- */
+  .route {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  .route-track {
+    display: flex; align-items: stretch; gap: 0; min-width: 620px;
+  }
+  .node {
+    flex: 1; display: flex; flex-direction: column; gap: 5px;
+    padding: 14px 12px; text-align: center; border-radius: 12px;
+  }
+  .node .lbl { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--sub); font-weight: 600; }
+  .node .val { font-size: 14px; font-weight: 650; line-height: 1.3; }
+  .node.you { background: var(--surface-2); }
+  .node.app { background: var(--accent-soft); }
+  .node.app .val { color: var(--accent); }
+  .node.cable { background: var(--surface-2); }
+  .node.cable .val { font-family: var(--mono); font-size: 13px; }
+  .node.dest { background: var(--green-soft); }
+  .node.dest .val { color: var(--green); }
+  .arrow { align-self: center; color: var(--sub); font-size: 20px; padding: 0 6px; flex: none; }
+  .route-note { margin: 16px 0 0; font-size: 14px; color: var(--sub); }
+  .route-note b { color: var(--text); }
+
+  /* ---- troubleshooting ---- */
+  .trouble { display: flex; flex-direction: column; gap: 12px; }
+  .fix {
+    display: grid; grid-template-columns: 12px 1fr; gap: 16px; align-items: start;
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: none; border-radius: var(--radius); padding: 18px 20px;
+    box-shadow: var(--shadow); position: relative; overflow: hidden;
+  }
+  .fix::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; }
+  .fix.r::before { background: var(--red); } .fix.y::before { background: var(--yellow); } .fix.a::before { background: var(--accent); }
+  .fix .stripe { width: 0; }
+  .fix h3 { margin: 0 0 5px; font-size: 16px; font-weight: 650; }
+  .fix p { margin: 0; color: var(--sub); font-size: 15px; }
+
+  /* ---- feature grid ---- */
+  .features { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .feat {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; box-shadow: var(--shadow);
+  }
+  .feat h3 { margin: 0 0 4px; font-size: 15px; font-weight: 650; }
+  .feat p { margin: 0; color: var(--sub); font-size: 14px; }
+
+  footer {
+    max-width: var(--maxw); margin: 56px auto 0; padding: 26px 20px 0;
+    border-top: 1px solid var(--border); color: var(--sub); font-size: 14px;
+    display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between;
+  }
+  .links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+
+  @media (max-width: 560px) {
+    .step { grid-template-columns: 1fr; }
+    .step .n { width: 40px; height: 40px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<header>
+  <p class="eyebrow">Инструкция по установке</p>
+  <h1>Голос Диктора</h1>
+  <p class="lede">Меняет ваш голос на голос диктора в реальном времени и отправляет его
+    в голосовой чат — вы говорите, а собеседники в игре или звонке слышат чистый синтезированный голос.</p>
+  <div class="statusrow">
+    <span class="pill"><span class="dot g"></span>Только Windows</span>
+    <span class="pill"><span class="dot a"></span>Русская речь</span>
+    <span class="pill"><span class="dot y"></span>Нужен VB-Cable (бесплатно)</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <div><h2>Установка за три шага</h2>
+      <p class="sec-sub">Порядок важен: без VB-Cable вас никто не услышит.</p></div>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="n">1</div>
+        <div>
+          <h3>Скачайте и распакуйте программу</h3>
+          <p>Возьмите <b>NVIDIA-версию</b>, если у вас видеокарта NVIDIA (быстрее), или
+            <b>CPU-версию</b> — она работает у всех, но медленнее. Распакуйте <code>.zip</code> в любую папку
+            и не вынимайте <code>Diktor.exe</code> из неё.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n">2</div>
+        <div>
+          <h3>Установите VB-Cable и перезагрузите ПК</h3>
+          <p>Это бесплатный «виртуальный кабель», по которому голос диктора попадёт в игру.
+            Скачайте с <a href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">vb-audio.com/Cable</a>,
+            запустите установщик <b>от имени администратора</b> и обязательно <b>перезагрузите компьютер</b>.</p>
+          <div class="callout"><b>Важно:</b> без перезагрузки Windows не увидит новый микрофон,
+            и программа сообщит, что VB-Cable не найден.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <div>
+          <h3>Запустите Diktor.exe</h3>
+          <p>При первом запуске программа докачает модель распознавания речи из интернета —
+            нужно подключение к сети. Дальше интернет требуется только для перевода.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <div><h2>Куда идёт звук</h2>
+      <p class="sec-sub">Главная путаница новичков — два конца одного кабеля. Вот как они связаны.</p></div>
+    </div>
+    <div class="route">
+      <div class="route-track">
+        <div class="node you"><span class="lbl">Вы</span><span class="val">Говорите в микрофон</span></div>
+        <div class="arrow">→</div>
+        <div class="node app"><span class="lbl">Голос Диктора</span><span class="val">Выводит звук в…</span></div>
+        <div class="arrow">→</div>
+        <div class="node cable"><span class="lbl">В программе выбрать</span><span class="val">CABLE Input</span></div>
+        <div class="arrow">→</div>
+        <div class="node cable"><span class="lbl">В игре выбрать</span><span class="val">CABLE Output</span></div>
+        <div class="arrow">→</div>
+        <div class="node dest"><span class="lbl">Результат</span><span class="val">Вас слышат собеседники</span></div>
+      </div>
+    </div>
+    <p class="route-note">В приложении «Голос Диктора», на вкладке «Устройства», в поле
+      <b>«Куда выводить звук»</b> выберите <b>CABLE Input</b>. А в самой игре, Discord или звонилке
+      выберите микрофон <b>CABLE Output (VB-Audio)</b>. Свой микрофон программа слушает сама —
+      системный по умолчанию из параметров звука Windows.</p>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <div><h2>Как пользоваться</h2>
+      <p class="sec-sub">После настройки — три действия.</p></div>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="n">1</div>
+        <div>
+          <h3>Выберите голос и модель</h3>
+          <p>На вкладке «Голос» — диктор (мужской/женский), точность распознавания
+            (<code>base</code> — быстрее, <code>medium</code> — точнее) и скорость речи.
+            Без видеокарты выбирайте <code>tiny</code> или <code>base</code>, иначе будет заметная задержка.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n">2</div>
+        <div>
+          <h3>Нажмите «Старт» и проверьте кнопкой «Тест»</h3>
+          <p>«Тест» проиграет проверочную фразу в выбранное устройство. Если звук идёт в CABLE Input,
+            в самой программе вы его не услышите — это нормально, его слышат собеседники.
+            Чтобы проверить на слух, временно выберите свои наушники.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <div>
+          <h3>Говорите</h3>
+          <p>После короткой паузы диктор озвучит сказанное. <kbd>F8</kbd> — пауза звука
+            (говорить своим голосом), <kbd>F9</kbd> — старт/стоп, работают даже когда окно свёрнуто.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <div><h2>Если тебя не слышно</h2>
+      <p class="sec-sub">Самое частое — и что с этим делать по порядку.</p></div>
+    </div>
+    <div class="trouble">
+      <div class="fix r">
+        <div class="stripe"></div>
+        <div><h3>Собеседники ничего не слышат</h3>
+          <p>В игре, Discord или звонилке микрофоном должен стоять <b>CABLE Output (VB-Audio)</b>,
+            а в самой программе вывод — <b>CABLE Input</b>. Проверьте оба конца.</p></div>
+      </div>
+      <div class="fix r">
+        <div class="stripe"></div>
+        <div><h3>VB-Cable не найден</h3>
+          <p>Установите его от имени администратора и <b>перезагрузите ПК</b>, затем нажмите
+            <kbd>↻</kbd> рядом со списком устройств в программе.</p></div>
+      </div>
+      <div class="fix y">
+        <div class="stripe"></div>
+        <div><h3>Программа не распознаёт мою речь</h3>
+          <p>В параметрах звука Windows выберите нужный микрофон <b>устройством ввода по умолчанию</b> —
+            программа слушает именно его. Проверьте, что индикатор уровня на вкладке «Устройства» реагирует на голос.</p></div>
+      </div>
+      <div class="fix y">
+        <div class="stripe"></div>
+        <div><h3>Голос диктора молчит или запаздывает</h3>
+          <p>Для синтеза и перевода нужен интернет. Без видеокарты тяжёлая модель (<code>medium</code>)
+            работает медленно — выберите <code>tiny</code>/<code>base</code>. Громкость не должна стоять на 0%.</p></div>
+      </div>
+      <div class="fix a">
+        <div class="stripe"></div>
+        <div><h3>Голос персонажа (RVC) звучит обычным голосом</h3>
+          <p>Кастомные голоса персонажей работают только с видеокартой NVIDIA. Без неё программа
+            озвучивает обычным голосом диктора — это ожидаемо, не поломка.</p></div>
+      </div>
+      <div class="fix a">
+        <div class="stripe"></div>
+        <div><h3>Антивирус ругается на Diktor.exe</h3>
+          <p>Ложное срабатывание — так помечаются почти все программы, собранные через PyInstaller.
+            Добавьте файл в исключения или соберите программу сами из открытого исходного кода.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <div><h2>Что ещё умеет</h2></div>
+    </div>
+    <div class="features">
+      <div class="feat"><h3>Профили голоса</h3><p>Сохраните сочетание голоса, скорости, перевода, громкости и тона под именем и переключайтесь одним выбором.</p></div>
+      <div class="feat"><h3>Озвучка текста</h3><p>Введите фразу в поле внизу и нажмите Enter — диктор произнесёт её, даже если вы молчите.</p></div>
+      <div class="feat"><h3>Переводчик-диктор</h3><p>Выберите язык в списке «Перевод» — диктор произнесёт вашу речь на нём (нужен интернет).</p></div>
+      <div class="feat"><h3>Голоса персонажей (RVC)</h3><p>Положите модель <code>.pth</code> в папку <code>voices/</code> — голос появится с пометкой «[Персонаж]». Только NVIDIA.</p></div>
+      <div class="feat"><h3>Поверх всех окон</h3><p>Окно не теряется за игрой, а крестик сворачивает программу в значок у часов.</p></div>
+      <div class="feat"><h3>Тон голоса</h3><p>Ползунок поднимает или опускает тембр персонажа на лету, без перезагрузки модели.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>«Голос Диктора» — замена голоса для голосового чата. Windows.</span>
+    <span class="links">
+      <a href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">Скачать VB-Cable</a>
+      <a href="https://github.com/yotsug8/dictor-voice" target="_blank" rel="noopener">Репозиторий и релизы</a>
+    </span>
+  </footer>
+
+</div>
+</body>
+</html>
