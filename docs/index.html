@@ -181,6 +181,15 @@
   .route-note b { color: var(--text); }
   @media (max-width: 560px) { .pick { grid-template-columns: 1fr; } }
 
+  /* ---- window shots ---- */
+  .shot { margin: 0; }
+  .shot img {
+    display: block; width: 100%; max-width: 520px; height: auto; margin: 0 auto;
+    border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow);
+  }
+  .shot figcaption { margin: 10px auto 0; max-width: 520px; text-align: center; font-size: 13px; color: var(--sub); }
+  .hero-shot { margin: 26px 0 4px; }
+
   /* ---- troubleshooting ---- */
   .trouble { display: flex; flex-direction: column; gap: 12px; }
   .fix {
@@ -229,6 +238,10 @@
     <span class="pill"><span class="dot a"></span>Русская речь</span>
     <span class="pill"><span class="dot y"></span>Нужен VB-Cable (бесплатно)</span>
   </div>
+  <figure class="shot hero-shot">
+    <img src="img/window-voice.png" alt="Главное окно приложения «Голос Диктора», вкладка «Голос»" width="1408" height="1600">
+    <figcaption>Так выглядит окно программы — вкладка «Голос».</figcaption>
+  </figure>
 </header>
 
 <div class="wrap">
@@ -311,6 +324,10 @@
     <p class="route-note"><b>Это два конца одного кабеля VB-Cable:</b> программа отдаёт голос
       в «вход» (CABLE Input), а игра берёт его из «выхода» (CABLE Output). Свой обычный микрофон
       программа слушает сама — системный по умолчанию из параметров звука Windows, отдельно выбирать не нужно.</p>
+    <figure class="shot" style="margin-top:20px">
+      <img src="img/window-devices.png" alt="Вкладка «Устройства»: поле «Куда выводить звук» со значением CABLE Input" width="1408" height="1600">
+      <figcaption>Вкладка «Устройства»: в поле «Куда выводить звук» стоит CABLE Input.</figcaption>
+    </figure>
   </section>
 
   <section>
