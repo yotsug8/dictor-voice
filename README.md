@@ -15,6 +15,9 @@
 Говоришь — после паузы программа распознаёт речь и озвучивает её голосом диктора,
 выводя звук в виртуальный микрофон, чтобы тебя слышали в голосовом чате.
 
+📖 **[Наглядная инструкция по установке и настройке](https://yotsug8.github.io/dictor-voice/)** —
+пошаговый гайд со схемой звукового маршрута и разбором «почему меня не слышно».
+
 ## Скачать
 
 [![Скачать NVIDIA-версию](https://img.shields.io/badge/Скачать-NVIDIA-3ecf8e?style=for-the-badge)](https://drive.google.com/file/d/1Wlzu2UZX5vxc6VEXWZfGJnkM8mUTNaYE/view?usp=sharing)
