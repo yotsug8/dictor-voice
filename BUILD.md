@@ -13,11 +13,23 @@
 
 ## 2. Установить зависимости
 
-В командной строке выполни:
+В командной строке выполни (одно из двух — равнозначно):
+
+```bat
+py -3.10 -m pip install -r requirements.txt
+```
+
+или списком вручную:
 
 ```bat
 py -3.10 -m pip install RealtimeSTT edge-tts sounddevice soundfile numpy faster-whisper silero-vad packaging customtkinter deep-translator pystray pillow keyboard
 ```
+
+> **Чтобы сборка была воспроизводимой:** после того как всё установилось и `Diktor.exe`
+> успешно собрался, зафиксируй точные версии командой
+> `py -3.10 -m pip freeze > requirements.lock.txt`. В следующий раз ставь из этого
+> файла (`pip install -r requirements.lock.txt`) — получишь ровно те же версии, и
+> обновления библиотек (например, RealtimeSTT) не сломают сборку.
 
 ## 3. Установить PyTorch
 
@@ -70,7 +82,7 @@ py -3.10 -c "from rvc_python.infer import RVCInference; print('rvc ok')"
 
 ## 4. Собрать приложение
 
-Положи в одну папку файлы: `golos_diktora_gui.py`, `sborka_exe.bat`, `hook-webrtcvad.py`, `icon.ico`.
+Положи в одну папку файлы: `golos_diktora_gui.py`, `diktor_logic.py`, `sborka_exe.bat`, `hook-webrtcvad.py`, `icon.ico`.
 Затем запусти сборщик:
 
 ```bat

@@ -8,6 +8,8 @@ import threading
 import queue
 import time
 
+import diktor_logic as dl
+
 # В собранном .exe (PyInstaller) урезанный модуль site не создаёт интерактивные
 # встроенные help/exit/quit/license/credits/copyright. Библиотеки RVC ссылаются
 # на них (видели "name 'help' is not defined"), что роняет конверсию. Возвращаем
@@ -110,6 +112,8 @@ def _resource(name):
 
 
 SETTINGS_FILE = os.path.join(_base_dir(), "settings.json")
+# лог пишется и в окно, и в этот файл — чтобы пользователь мог прислать его при проблеме
+LOG_FILE = os.path.join(_base_dir(), "diktor.log")
 VOICES_DIR = os.path.join(_base_dir(), "voices")
 # базовый голос Edge TTS, поверх которого RVC накладывает тембр персонажа
 RVC_BASE_VOICE = "ru-RU-DmitryNeural"
@@ -156,6 +160,8 @@ class DiktorApp:
         # не дёргаем конверсию и не засоряем лог повторными попытками
         self._rvc_no_cuda = False
         self.tray = None
+        self._diagnosing = False
+        self._log_lock = threading.Lock()
         self.ui_queue = queue.Queue()
         self.mic_level = 0.0
         self._rvc = None
@@ -462,6 +468,9 @@ class DiktorApp:
         ctk.CTkButton(labrow, text="Очистить", width=72, height=24, command=self._clear_log,
                       fg_color=FIELD, hover_color="#3a3a54", text_color=SUB,
                       corner_radius=8, font=(FONT, 10)).pack(side="right")
+        ctk.CTkButton(labrow, text="🩺 Проверка", width=96, height=24, command=self._diagnose,
+                      fg_color=FIELD, hover_color="#3a3a54", text_color=ACCENT,
+                      corner_radius=8, font=(FONT, 10)).pack(side="right", padx=(0, 6))
         self.log = ctk.CTkTextbox(self.root, fg_color=CARD, text_color=TEXT,
                                   font=("Consolas", 12), corner_radius=14, wrap="word")
         self.log.pack(fill="both", expand=True, padx=26, pady=(0, 14))
@@ -479,11 +488,7 @@ class DiktorApp:
 
     # ---------- devices ----------
     def _friendly(self, name):
-        if "cable input" in name.lower():
-            return "Виртуальный микрофон (CABLE Input)"
-        if "(" in name and ")" not in name:
-            name = name.split("(")[0].strip()
-        return name
+        return dl.friendly_device_name(name)
 
     def _query_devices(self, channel_key):
         """Общий опрос sd.query_devices() для устройств вывода/ввода.
@@ -528,24 +533,13 @@ class DiktorApp:
         return labels or ["(нет устройств)"]
 
     def _cable_present(self, devices):
-        """True, если среди устройств есть виртуальный микрофон VB-Cable."""
-        return any("cable input" in d.lower() for d in devices)
+        return dl.has_cable(devices)
 
     def _default_device(self, devices):
-        for d in devices:
-            if "cable input" in d.lower():
-                return d
-        return devices[0]
+        return dl.default_output(devices)
 
     def _map_idx(self, device_map, selected_label):
-        if not device_map:
-            return None
-        if selected_label in device_map:
-            return device_map[selected_label]
-        # выбранная метка устарела (устройство пропало из списка) — берём
-        # первое доступное вместо произвольного индекса 0, который может
-        # не входить в device_map вовсе
-        return next(iter(device_map.values()))
+        return dl.map_device_index(device_map, selected_label)
 
     def _device_idx(self):
         # читаем снимок, а не Tk-переменную: вызывается из рабочих потоков
@@ -600,8 +594,7 @@ class DiktorApp:
         self._save_settings_soon()
 
     def _pitch_text(self, v):
-        v = int(v)
-        return f"{'+' if v > 0 else ''}{v}"
+        return dl.format_pitch(v)
 
     def _on_pitch(self, val):
         self.pitch_lbl.configure(text=self._pitch_text(float(val)))
@@ -779,8 +772,108 @@ class DiktorApp:
 
     # ---------- ui queue ----------
     def _log(self, msg):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.ui_queue.put(("log", f"[{ts}] {msg}"))
+        now = datetime.datetime.now()
+        line = f"[{now.strftime('%H:%M:%S')}] {msg}"
+        self.ui_queue.put(("log", line))
+        self._write_log_file(now, line)
+
+    def _write_log_file(self, now, line):
+        """Дублирует строку лога в файл diktor.log (с датой), чтобы пользователь
+        мог прислать его при проблеме. Вызывается из разных потоков — под замком.
+        Файл не даём разрастаться: при превышении ~1 МБ оставляем последние строки."""
+        try:
+            with self._log_lock:
+                try:
+                    if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 1_000_000:
+                        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                            tail = f.readlines()[-2000:]
+                        with open(LOG_FILE, "w", encoding="utf-8") as f:
+                            f.writelines(tail)
+                except Exception:
+                    pass
+                with open(LOG_FILE, "a", encoding="utf-8") as f:
+                    f.write(f"{now.strftime('%Y-%m-%d')} {line}\n")
+        except Exception:
+            # нет прав на запись (Program Files) и т.п. — не мешаем работе
+            pass
+
+    def _diagnose(self):
+        """Проверяет всё, что нужно для работы, и пишет понятный отчёт в лог.
+        Прямо отвечает на «почему не работает/не слышно»."""
+        if self._diagnosing:
+            return
+        self._diagnosing = True
+        self._log("─── Проверка настроек ───")
+
+        def run():
+            try:
+                self._run_diagnostics()
+            except Exception as e:
+                self._log(f"Проверка прервалась: {e}")
+            finally:
+                self._diagnosing = False
+        threading.Thread(target=run, daemon=True).start()
+
+    def _run_diagnostics(self):
+        OK, NO = "✓", "✗"
+        try:
+            devs = self._devices()
+            if dl.has_cable(devs):
+                self._log(f"{OK} VB-Cable найден среди устройств вывода.")
+            else:
+                self._log(f"{NO} VB-Cable не найден. Установите его и перезагрузите ПК: "
+                          "https://vb-audio.com/Cable/")
+        except Exception as e:
+            self._log(f"{NO} Не удалось опросить устройства вывода: {e}")
+
+        try:
+            idx = self._device_idx()
+            if idx is not None:
+                self._log(f"{OK} Устройство вывода выбрано (индекс {idx}).")
+            else:
+                self._log(f"{NO} Устройство вывода не выбрано — проверьте список на вкладке «Устройства».")
+        except Exception as e:
+            self._log(f"{NO} Проблема с устройством вывода: {e}")
+
+        try:
+            import sounddevice as sd
+            di = sd.default.device[0]
+            if di is not None and di >= 0:
+                name = sd.query_devices(di).get("name", "?")
+                self._log(f"{OK} Системный микрофон по умолчанию: {name}.")
+            else:
+                self._log(f"{NO} Не задан микрофон по умолчанию — выберите его в параметрах звука Windows.")
+        except Exception as e:
+            self._log(f"{NO} Не удалось проверить микрофон: {e}")
+
+        try:
+            import socket
+            socket.create_connection(("speech.platform.bing.com", 443), timeout=6).close()
+            self._log(f"{OK} Интернет доступен (нужен для озвучки и перевода).")
+        except Exception:
+            self._log(f"{NO} Нет доступа к интернету — озвучка (edge-tts) и перевод работать не будут.")
+
+        try:
+            import torch
+            if torch.cuda.is_available():
+                self._log(f"{OK} Видеокарта NVIDIA доступна — голоса персонажей (RVC) работают.")
+            else:
+                self._log(f"{OK} Видеокарты NVIDIA нет — обычный диктор работает, "
+                          "голоса персонажей (RVC) недоступны, это нормально.")
+        except Exception as e:
+            self._log(f"{NO} Не удалось проверить видеокарту: {e}")
+
+        try:
+            import importlib.util
+            if importlib.util.find_spec("RealtimeSTT") is not None:
+                self._log(f"{OK} Библиотека распознавания на месте.")
+            else:
+                self._log(f"{NO} Библиотека распознавания не установлена.")
+        except Exception as e:
+            self._log(f"{NO} Не удалось проверить библиотеку распознавания: {e}")
+
+        self._log(f"Подробный лог сохраняется в файл рядом с программой: {os.path.basename(LOG_FILE)}")
+        self._log("─── Проверка завершена ───")
 
     def _status(self, color, label):
         self.ui_queue.put(("status", (color, label)))
@@ -799,9 +892,7 @@ class DiktorApp:
             # чанки в _on_audio_chunk — не даём полоске «жить», когда мы уже
             # не слушаем, иначе выглядит будто распознавание всё ещё идёт
             lvl = self.mic_level if self.running else 0.0
-            # множитель 2.5 (а не 4): RMS речи в норме 0.05–0.3, при *4 полоска
-            # почти всегда упиралась в максимум; nan/мусор -> 0
-            level = 0.0 if lvl != lvl else min(1.0, max(0.0, lvl * 2.5))
+            level = dl.meter_level(lvl)
             self.mic_bar.set(level)
             color = RED if level > 0.92 else YELLOW if level > 0.6 else GREEN
             self.mic_bar.configure(progress_color=color)
@@ -912,7 +1003,7 @@ class DiktorApp:
             # и не засоряем лог повторными сообщениями об ошибке
             return samples, sr
         failed_at = self._rvc_failed_paths.get(model_path)
-        if failed_at is not None and (time.monotonic() - failed_at) < RVC_RETRY_COOLDOWN:
+        if dl.rvc_in_cooldown(failed_at, time.monotonic(), RVC_RETRY_COOLDOWN):
             # недавно сбоила — временно играем базовым голосом, не дёргая RVC,
             # но по истечении кулдауна попробуем снова
             return samples, sr
@@ -1502,14 +1593,14 @@ class DiktorApp:
 
             errors = 0
             text = (text or "").strip()
-            if len(text) < 2:
+            if not dl.is_speakable(text):
                 continue
             # дубликат подавляем только если он пришёл почти сразу за прошлым
             # (RealtimeSTT иногда отдаёт ту же фразу дважды). Если пользователь
             # сознательно повторил короткую фразу («Да», «Да») спустя секунды —
             # озвучиваем, иначе казалось, что программа «проглатывает» повторы
             now = time.monotonic()
-            if text == last_text and (now - last_text_time) < 3.0:
+            if dl.is_duplicate(text, last_text, now, last_text_time, 3.0):
                 continue
             last_text = text
             last_text_time = now
