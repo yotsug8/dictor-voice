@@ -133,6 +133,15 @@ class DiktorApp:
         self.muted = False
         self.recorder = None
         self._recorder_lock = threading.Lock()
+        # «поколение» рабочего потока: каждый Старт увеличивает счётчик; рабочий
+        # поток со старым поколением сам завершается и выключает свой рекордер —
+        # так Старт→Стоп→Старт во время загрузки модели не оставляет второй
+        # рекордер без владельца (см. _run/_install_recorder)
+        self._run_generation = 0
+        # сериализует саму сборку AudioToTextRecorder между рабочими потоками:
+        # два одновременных make_recorder() открывали бы один микрофон сразу
+        # из двух мест
+        self._build_lock = threading.Lock()
         self._recorder_restart_pending = False
         # последний «финальный» статус (Остановлено/Ошибка) для _reassert_status
         self._desired_status = None
@@ -221,8 +230,8 @@ class DiktorApp:
             self._cur_output = self.device_var.get()
             self._cur_speed = self.speed_var.get()
             self._cur_lang = self.lang_var.get()
-            self._cur_vol = max(0, min(100, int(self.vol_var.get())))
-            self._cur_pitch = max(-12, min(12, int(self.pitch_var.get())))
+            self._cur_vol = dl.clamp_int(self.vol_var.get(), 0, 100, 100)
+            self._cur_pitch = dl.clamp_int(self.pitch_var.get(), -12, 12, 0)
         except Exception:
             pass
 
@@ -324,15 +333,9 @@ class DiktorApp:
         self.speed_var.trace_add("write", self._on_setting_change)
         self.lang_var = ctk.StringVar(value=g("lang", list(LANGUAGES)[0], LANGUAGES))
         self.lang_var.trace_add("write", self._on_setting_change)
-        try:
-            vol0 = max(0, min(100, int(self.cfg.get("volume", 100))))
-        except (TypeError, ValueError):
-            vol0 = 100
+        vol0 = dl.clamp_int(self.cfg.get("volume", 100), 0, 100, 100)
         self.vol_var = ctk.IntVar(value=vol0)
-        try:
-            pitch0 = max(-12, min(12, int(self.cfg.get("pitch", 0))))
-        except (TypeError, ValueError):
-            pitch0 = 0
+        pitch0 = dl.clamp_int(self.cfg.get("pitch", 0), -12, 12, 0)
         self.pitch_var = ctk.IntVar(value=pitch0)
 
         devices = self._devices()
@@ -812,19 +815,24 @@ class DiktorApp:
                 self._log(f"Проверка прервалась: {e}")
             finally:
                 self._diagnosing = False
-        threading.Thread(target=run, daemon=True).start()
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except Exception as e:
+            # не удалось создать поток — не оставляем кнопку навсегда заблокированной
+            self._diagnosing = False
+            self._log(f"Не удалось запустить проверку: {e}")
 
     def _run_diagnostics(self):
         OK, NO = "✓", "✗"
-        try:
-            devs = self._devices()
-            if dl.has_cable(devs):
-                self._log(f"{OK} VB-Cable найден среди устройств вывода.")
-            else:
-                self._log(f"{NO} VB-Cable не найден. Установите его и перезагрузите ПК: "
-                          "https://vb-audio.com/Cable/")
-        except Exception as e:
-            self._log(f"{NO} Не удалось опросить устройства вывода: {e}")
+        # берём КЭШ (self._cable_found обновляется в главном потоке при сборке
+        # и по кнопке ↻), а не пересканируем устройства из этого потока: иначе
+        # переопрос перезаписал бы self.device_map и мог увести звук на другое
+        # устройство, плюс конкурентный вызов PortAudio с проигрыванием
+        if getattr(self, "_cable_found", False):
+            self._log(f"{OK} VB-Cable найден среди устройств вывода.")
+        else:
+            self._log(f"{NO} VB-Cable не найден. Установите его, перезагрузите ПК и нажмите ↻ "
+                      "на вкладке «Устройства»: https://vb-audio.com/Cable/")
 
         try:
             idx = self._device_idx()
@@ -1305,7 +1313,12 @@ class DiktorApp:
         self.btn.configure(text="■  Стоп", fg_color=RED, hover_color=RED_H)
         self._status(YELLOW, "Загрузка")
         self._save_settings()
-        threading.Thread(target=self._run, daemon=True).start()
+        # новое поколение: если предыдущий рабочий поток ещё дорабатывает
+        # (грузил модель во время Стоп→Старт), он увидит смену поколения и
+        # завершится, не подменяя рекордер
+        self._run_generation += 1
+        gen = self._run_generation
+        threading.Thread(target=self._run, args=(gen,), daemon=True).start()
 
     def _discard_recorder(self):
         # _recorder_lock делает чтение-и-сброс self.recorder атомарным относительно
@@ -1355,15 +1368,17 @@ class DiktorApp:
             for t in pending:
                 t.join()
 
-    def _install_recorder(self, new_recorder):
+    def _install_recorder(self, new_recorder, gen):
         """Атомарно ставит new_recorder как текущий рекордер, если приложение
-        всё ещё запущено; иначе выключает его. Без общего замка с
-        _discard_recorder() здесь была гонка: между проверкой self.running
-        и записью self.recorder мог отработать stop()/_quit() из главного
-        потока, после чего новый рекордер всё равно подменял бы self.recorder
-        и оставался бы без владельца до конца процесса."""
+        всё ещё запущено И это поколение рабочего потока актуально; иначе
+        выключает его. Без общего замка с _discard_recorder() здесь была гонка:
+        между проверкой self.running и записью self.recorder мог отработать
+        stop()/_quit() из главного потока, после чего новый рекордер всё равно
+        подменял бы self.recorder и оставался бы без владельца до конца процесса.
+        Проверка gen отсекает «старый» рабочий поток (Стоп→Старт во время
+        загрузки модели), чтобы он не перезатёр рекордер нового потока."""
         with self._recorder_lock:
-            if not self.running:
+            if not self.running or gen != self._run_generation:
                 stale = new_recorder
             else:
                 self.recorder = new_recorder
@@ -1417,7 +1432,7 @@ class DiktorApp:
         self._ui(lambda: setattr(self, "_desired_status", (RED, "Ошибка")))
 
     # ---------- worker ----------
-    def _run(self):
+    def _run(self, gen):
         try:
             import torch
             from RealtimeSTT import AudioToTextRecorder
@@ -1466,16 +1481,19 @@ class DiktorApp:
         # предыдущего рекордера может ещё выполняться в фоне — дожидаемся его,
         # иначе новый AudioToTextRecorder откроет тот же микрофон, пока старый
         # ещё не отпустил его
-        self._join_recorder_shutdown()
         try:
-            new_recorder = make_recorder()
+            # _build_lock сериализует саму сборку рекордера между рабочими
+            # потоками (например, старый поток при Стоп→Старт ещё не вышел)
+            with self._build_lock:
+                self._join_recorder_shutdown()
+                new_recorder = make_recorder()
         except Exception as e:
             self._log(f"Ошибка запуска распознавания: {e}")
             self._log("Если это первый запуск — модель скачивается из интернета. Проверьте "
                       "подключение к сети и нажмите «Старт» ещё раз.")
             self._abort_run()
             return
-        if not self._install_recorder(new_recorder):
+        if not self._install_recorder(new_recorder, gen):
             # пользователь успел нажать «Стоп», пока грузилась модель (загрузка
             # может занять десятки секунд, особенно при первой загрузке из
             # интернета) — stop() уже сбросил интерфейс, новый рекордер выключен
@@ -1497,9 +1515,10 @@ class DiktorApp:
                 # см. комментарий в _join_recorder_shutdown(): дожидаемся, пока
                 # старый рекордер (выключенный в фоне при смене модели/микрофона)
                 # действительно отпустит микрофон, прежде чем открывать новый
-                self._join_recorder_shutdown()
-                new_recorder = make_recorder()
-                if not self._install_recorder(new_recorder):
+                with self._build_lock:
+                    self._join_recorder_shutdown()
+                    new_recorder = make_recorder()
+                if not self._install_recorder(new_recorder, gen):
                     return False
                 errors = 0
                 last_text = ""
@@ -1537,7 +1556,7 @@ class DiktorApp:
             return call
 
         pending_call = None
-        while self.running:
+        while self.running and gen == self._run_generation:
             if pending_call is None:
                 rec = self.recorder
                 if rec is None:
