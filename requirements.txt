@@ -1,0 +1,27 @@
+# Зависимости «Голоса Диктора» (кроме PyTorch — он ставится отдельно, см. BUILD.md,
+# т.к. именно он определяет режим NVIDIA/CPU).
+#
+# Установка:  py -3.10 -m pip install -r requirements.txt
+#
+# Версии здесь НЕ закреплены жёстко намеренно: точный «замок» под вашу машину
+# делается ПОСЛЕ успешной сборки командой
+#     py -3.10 -m pip freeze > requirements.lock.txt
+# — полученный requirements.lock.txt и есть воспроизводимый набор версий.
+# Так вы не рискуете жёстким пином, не проверенным на вашей системе.
+
+RealtimeSTT
+edge-tts
+sounddevice
+soundfile
+numpy
+faster-whisper
+silero-vad
+packaging
+customtkinter
+deep-translator
+pystray
+pillow
+keyboard
+
+# Кастомные голоса персонажей (RVC) — по желанию, нужна видеокарта NVIDIA:
+# rvc-python
