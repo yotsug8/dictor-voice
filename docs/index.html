@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Голос Диктора — как установить и настроить: три шага установки, схема звукового маршрута и что делать, если тебя не слышно.">
-<title>Голос Диктора — как установить и настроить</title>
+<meta name="description" content="Dictor Voice: установка, настройка и использование приложения для обработки речи.">
+<title>Dictor Voice — документация</title>
 <style>
   :root {
     --bg: #f3f3fb;
@@ -230,9 +230,8 @@
 <body>
 <header>
   <p class="eyebrow">Инструкция по установке</p>
-  <h1>Голос Диктора</h1>
-  <p class="lede">Вы говорите в микрофон — программа повторяет сказанное голосом диктора
-    и отправляет его в голосовой чат. В игре или звонке вас слышат этим голосом, а не вашим.</p>
+  <h1>Dictor Voice</h1>
+  <p class="lede">Приложение для распознавания и синтеза речи на Windows.</p>
   <div class="statusrow">
     <span class="pill"><span class="dot g"></span>Только Windows</span>
     <span class="pill"><span class="dot a"></span>Русская речь</span>
@@ -249,8 +248,8 @@
   <section>
     <div class="sec-head">
       <span class="sec-num">01</span>
-      <div><h2>Установка за три шага</h2>
-      <p class="sec-sub">Порядок важен: без VB-Cable вас никто не услышит.</p></div>
+      <div><h2>Установка</h2>
+      <p class="sec-sub">Для вывода звука в другие приложения используется VB-Cable.</p></div>
     </div>
     <div class="steps">
       <div class="step">
@@ -261,8 +260,7 @@
             <a href="https://github.com/yotsug8/dictor-voice" target="_blank" rel="noopener">странице проекта на GitHub</a>
             нажмите зелёную кнопку <b>«Скачать NVIDIA»</b> — откроется Google Drive с файлом
             <code>Diktor-NVIDIA_….zip</code>.</p>
-          <p><b>Нет видеокарты NVIDIA</b> или не уверены → возьмите <b>CPU-версию</b> (работает у всех,
-            медленнее): на GitHub откройте раздел
+          <p><b>Нет видеокарты NVIDIA</b> или не уверены → возьмите <b>CPU-версию</b>: на GitHub откройте раздел
             <a href="https://github.com/yotsug8/dictor-voice/releases" target="_blank" rel="noopener">Releases</a>
             и скачайте файл <code>Diktor_CPU_….zip</code> (в разделе Assets последнего релиза).</p>
           <p>Распакуйте архив в любую папку и не вынимайте <code>Diktor.exe</code> из неё.</p>
@@ -294,7 +292,7 @@
     <div class="sec-head">
       <span class="sec-num">02</span>
       <div><h2>Как настроить звук</h2>
-      <p class="sec-sub">Всего два выбора — куда программа отдаёт голос и откуда его берёт игра.</p></div>
+      <p class="sec-sub">Настройка устройств ввода и вывода.</p></div>
     </div>
     <div class="route">
       <div class="flow">
@@ -334,7 +332,7 @@
     <div class="sec-head">
       <span class="sec-num">03</span>
       <div><h2>Как пользоваться</h2>
-      <p class="sec-sub">После настройки — три действия.</p></div>
+      <p class="sec-sub">Выбор голоса и запуск обработки речи.</p></div>
     </div>
     <div class="steps">
       <div class="step">
@@ -407,21 +405,16 @@
         <div class="stripe"></div>
         <div><h3>Голос персонажа (RVC) звучит обычным голосом</h3>
           <p>Кастомные голоса персонажей работают только с видеокартой NVIDIA. Без неё программа
-            озвучивает обычным голосом диктора — это ожидаемо, не поломка.</p></div>
+            озвучивает обычным голосом диктора — используется синтез речи без RVC.</p></div>
       </div>
-      <div class="fix a">
-        <div class="stripe"></div>
-        <div><h3>Антивирус ругается на Diktor.exe</h3>
-          <p>Ложное срабатывание — так помечаются почти все программы, собранные через PyInstaller.
-            Добавьте файл в исключения или соберите программу сами из открытого исходного кода.</p></div>
-      </div>
+
     </div>
   </section>
 
   <section>
     <div class="sec-head">
       <span class="sec-num">05</span>
-      <div><h2>Что ещё умеет</h2></div>
+      <div><h2>Возможности</h2></div>
     </div>
     <div class="features">
       <div class="feat"><h3>Профили голоса</h3><p>Сохраните сочетание голоса, скорости, перевода, громкости и тона под именем и переключайтесь одним выбором.</p></div>
