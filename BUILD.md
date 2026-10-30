@@ -25,11 +25,8 @@ py -3.10 -m pip install -r requirements.txt
 py -3.10 -m pip install RealtimeSTT edge-tts sounddevice soundfile numpy faster-whisper silero-vad packaging customtkinter deep-translator pystray pillow keyboard
 ```
 
-> **Чтобы сборка была воспроизводимой:** после того как всё установилось и `Diktor.exe`
-> успешно собрался, зафиксируй точные версии командой
-> `py -3.10 -m pip freeze > requirements.lock.txt`. В следующий раз ставь из этого
-> файла (`pip install -r requirements.lock.txt`) — получишь ровно те же версии, и
-> обновления библиотек (например, RealtimeSTT) не сломают сборку.
+> Для фиксации версий зависимостей: `py -3.10 -m pip freeze > requirements.lock.txt`.
+> Для повторной установки: `pip install -r requirements.lock.txt`.
 
 ## 3. Установить PyTorch
 
@@ -39,7 +36,7 @@ py -3.10 -m pip install RealtimeSTT edge-tts sounddevice soundfile numpy faster-
   ```bat
   py -3.10 -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
   ```
-- **Без** видеокарты NVIDIA (работает у всех, медленнее):
+- **CPU**:
   ```bat
   py -3.10 -m pip install torch torchaudio
   ```
@@ -110,8 +107,6 @@ PyInstaller не всегда сам находит все скрытые зав
    для остальных — в список флагов команды `PyInstaller` ниже.
 3. Запусти `sborka_exe.bat` заново (старые `build`, `dist`, `Diktor.spec` он удалит сам).
 
-Это нормальный процесс для PyInstaller-сборок с такими библиотеками — обычно
-хватает 1–3 таких итераций.
 
 ## Примечания
 
